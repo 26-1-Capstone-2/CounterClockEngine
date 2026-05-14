@@ -1,12 +1,3 @@
-import os
-import sys
-
-# Add verification_geofencing to the import path
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_VG_PATH = os.path.join(_HERE, "..", "verification_geofencing")
-if _VG_PATH not in sys.path:
-    sys.path.insert(0, _VG_PATH)
-
 from flask import Flask, jsonify
 from dotenv import load_dotenv, find_dotenv
 
@@ -15,6 +6,7 @@ from .routes.optimizer import bp as optimizer_bp
 from .routes.simulation import bp as simulation_bp
 from .routes.kakao import bp as kakao_bp
 from .routes.eta import bp as eta_bp
+from .routes.appointment import bp as appointment_bp
 
 
 def create_app() -> Flask:
@@ -23,10 +15,11 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    app.register_blueprint(optimizer_bp,  url_prefix="/api/optimizer")
-    app.register_blueprint(simulation_bp, url_prefix="/api/simulation")
-    app.register_blueprint(kakao_bp,      url_prefix="/api/route")
-    app.register_blueprint(eta_bp,        url_prefix="/api/eta")
+    app.register_blueprint(optimizer_bp,   url_prefix="/api/optimizer")
+    app.register_blueprint(simulation_bp,  url_prefix="/api/simulation")
+    app.register_blueprint(kakao_bp,       url_prefix="/api/route")
+    app.register_blueprint(eta_bp,         url_prefix="/api/eta")
+    app.register_blueprint(appointment_bp, url_prefix="/api/appointment")
 
     @app.get("/health")
     def health():
@@ -53,6 +46,10 @@ def create_app() -> Flask:
                     "POST /api/eta/calculate",
                     "POST /api/eta/movement",
                     "POST /api/eta/track",
+                ],
+                "appointment": [
+                    "POST /api/appointment/register",
+                    "POST /api/appointment/departure",
                 ],
             },
         })

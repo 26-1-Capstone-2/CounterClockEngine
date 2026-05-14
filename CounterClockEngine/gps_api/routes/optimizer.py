@@ -6,7 +6,7 @@ POST /api/optimizer/interval
 from datetime import datetime
 from flask import Blueprint, request, jsonify, abort
 
-from optimizer import calculate_next_interval, LocationPoint, Geofence
+from gps_api.core.optimizer import calculate_next_interval, LocationPoint, Geofence
 
 bp = Blueprint("optimizer", __name__)
 
