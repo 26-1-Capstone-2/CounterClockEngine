@@ -1,9 +1,34 @@
 from datetime import datetime, timedelta
+from uuid import uuid4
 from gps_api.core.optimizer import haversine
 
 TRACKING_WINDOW_HOURS = 4
 DEFAULT_BUFFER_MIN = 10
 DEFAULT_SPEED_MPS = 1.4  # 도보 기본값
+
+# appointment_id -> {"destination": (lat, lon), "appointment_time": datetime}
+_store: dict[str, dict] = {}
+
+
+def register_appointment(
+    destination: tuple[float, float],
+    appointment_time: datetime,
+) -> str:
+    appointment_id = str(uuid4())
+    _store[appointment_id] = {
+        "destination": destination,
+        "appointment_time": appointment_time,
+    }
+    return appointment_id
+
+
+def cancel_appointment(appointment_id: str) -> bool:
+    """Returns True if found and removed, False if not found."""
+    return _store.pop(appointment_id, None) is not None
+
+
+def get_appointment(appointment_id: str) -> dict | None:
+    return _store.get(appointment_id)
 
 
 def compute_departure(

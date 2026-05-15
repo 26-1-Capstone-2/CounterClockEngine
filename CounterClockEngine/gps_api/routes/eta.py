@@ -101,7 +101,7 @@ def eta_movement():
     dest = _parse_loc(body["destination"], "destination")
 
     velocity  = float(body.get("velocity", 0.0))
-    threshold = float(body.get("threshold", 50.0))
+    threshold = float(body["threshold"]) if "threshold" in body else None
     speed     = float(body.get("speed_mps", 1.4))
 
     result = handle_movement(prev, curr, dest, velocity, threshold)
@@ -113,6 +113,7 @@ def eta_movement():
         "next_interval": result["next_interval"],
         "velocity":      round(result["velocity"], 4),
         "gradient":      round(result["gradient"], 2),
+        "threshold":     result["threshold"],
         "eta_sec":       round(eta_sec, 1),
         "eta_min":       round(eta_sec / 60, 2),
     })
@@ -160,7 +161,7 @@ def eta_track():
         abort(400, description="waypoints must be an array of at least 2 coordinates.")
 
     dest      = _parse_loc(body["destination"], "destination")
-    threshold = float(body.get("threshold", 50.0))
+    threshold = float(body["threshold"]) if "threshold" in body else None
     speed     = float(body.get("speed_mps", 1.4))
 
     try:
@@ -187,6 +188,7 @@ def eta_track():
             "next_interval": result["next_interval"],
             "velocity": round(velocity, 4),
             "gradient": round(result["gradient"], 2),
+            "threshold": result["threshold"],
             "eta_sec": round(eta_sec, 1),
             "eta_min": round(eta_sec / 60, 2),
         })

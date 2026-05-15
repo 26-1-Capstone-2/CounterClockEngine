@@ -50,6 +50,7 @@ def create_app() -> Flask:
                 "appointment": [
                     "POST /api/appointment/register",
                     "POST /api/appointment/departure",
+                    "POST /api/appointment/cancel",
                 ],
             },
         })

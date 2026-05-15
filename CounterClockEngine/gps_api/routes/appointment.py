@@ -6,7 +6,12 @@ POST /api/appointment/departure — 현재 위치 기반 출발 시간 계산
 from datetime import datetime
 from flask import Blueprint, request, jsonify, abort
 
-from gps_api.core.appointment import compute_departure, get_tracking_info
+from gps_api.core.appointment import (
+    compute_departure,
+    get_tracking_info,
+    register_appointment,
+    cancel_appointment,
+)
 
 bp = Blueprint("appointment", __name__)
 
@@ -54,9 +59,11 @@ def register():
     dest = _parse_loc(body["destination"], "destination")
     appt_time = _parse_datetime(body["appointment_time"])
 
+    appointment_id = register_appointment(dest, appt_time)
     info = get_tracking_info(appt_time)
 
     return jsonify({
+        "appointment_id": appointment_id,
         "destination": list(dest),
         "appointment_time": appt_time.isoformat(),
         **info,
@@ -107,3 +114,35 @@ def departure():
 
     result = compute_departure(curr, dest, appt_time, speed, buffer)
     return jsonify(result)
+
+
+@bp.post("/cancel")
+def cancel():
+    """
+    등록된 약속을 취소합니다.
+
+    Request JSON:
+      {
+        "appointment_id": "550e8400-e29b-41d4-a716-446655440000"
+      }
+
+    Response JSON:
+      {
+        "appointment_id": "550e8400-e29b-41d4-a716-446655440000",
+        "cancelled": true
+      }
+    """
+    body = request.get_json(silent=True) or {}
+
+    appointment_id = body.get("appointment_id")
+    if not appointment_id:
+        abort(400, description="appointment_id field is required.")
+
+    found = cancel_appointment(appointment_id)
+    if not found:
+        abort(404, description=f"appointment_id '{appointment_id}' not found.")
+
+    return jsonify({
+        "appointment_id": appointment_id,
+        "cancelled": True,
+    })
