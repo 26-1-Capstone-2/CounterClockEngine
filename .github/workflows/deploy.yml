@@ -41,8 +41,8 @@ jobs:
           script: |
             docker pull ${{ secrets.DOCKER_USERNAME }}/davidjk522:cap2flask
 
-            docker stop davidjk522 || true
-            docker rm davidjk522 || true
+            docker stop myapp || true
+            docker rm myapp || true
 
             docker run -d \
               --name myapp \
