@@ -7,9 +7,9 @@ POST /api/route/departure  — Calculate departure time from target arrival time
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify, abort, current_app
 
-from kakao_route import fetch_route, resample_route, calculate_departure_time
-from optimizer import Geofence
-from battery_simulation import simulate_normal_mode, simulate_optimized_mode
+from gps_api.core.kakao_route import fetch_route, resample_route, calculate_departure_time
+from gps_api.core.optimizer import Geofence
+from gps_api.core.battery_simulation import simulate_normal_mode, simulate_optimized_mode
 
 bp = Blueprint("kakao", __name__)
 

@@ -7,8 +7,8 @@ import random
 from datetime import datetime
 from flask import Blueprint, request, jsonify, abort
 
-from optimizer import Geofence
-from battery_simulation import (
+from gps_api.core.optimizer import Geofence
+from gps_api.core.battery_simulation import (
     generate_route,
     simulate_normal_mode,
     simulate_optimized_mode,
