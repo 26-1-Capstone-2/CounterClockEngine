@@ -29,7 +29,7 @@ jobs:
       # Docker Hub 업로드
       - name: Push Docker image
         run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/davidjk522:capflask
+          docker push ${{ secrets.DOCKER_USERNAME }}/davidjk522:cap2flask
 
       # 서버 배포
       - name: Deploy to Server
