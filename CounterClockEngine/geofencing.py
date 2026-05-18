@@ -19,7 +19,7 @@ class GeofenceZone:
     location_id: str
     name: str
     center: Coordinate
-    radius_meters: float  # triggers "arrived" when user enters this zone
+    radius_meters: float = 100.0  # triggers "arrived" when user enters this zone
 
 
 class GeofencingEngine:

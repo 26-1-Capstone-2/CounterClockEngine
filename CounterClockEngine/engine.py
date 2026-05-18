@@ -123,6 +123,12 @@ class CounterClockEngine:
 
     def add_event(self, event: Event):
         self.events.add_event(event)
+        from geofencing import GeofenceZone
+        self.geofencing.register_zone(GeofenceZone(
+            location_id=event.location_id,
+            name=event.title,
+            center=event.destination,
+        ))
 
     def remove_event(self, event_id: str):
         self.events.remove_event(event_id)
