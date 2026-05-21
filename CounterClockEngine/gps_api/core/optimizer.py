@@ -61,12 +61,11 @@ D_MAX_M         = 3000.0 # 이 거리 이상은 거리 긴급도=0 처리
 TIME_ALPHA      = 0.5    # 0=시간만, 1=거리만 (0.5: 균등 혼합)
 # ────────────────────────────────────────────────────────────────
 
-ACTIVITY_MULTIPLIER = {
-    "stationary": 3.0,
-    "walking":    1.0,
-    "vehicle":    0.3,
-    "unknown":    1.0,
-}
+# sigmoid 전환 기준점(m/s)과 가파름(steepness)
+# stationary→walking: 0.5 m/s, walking→vehicle: 8.0 m/s
+_ACT_BOUNDARY  = (0.5,  8.0)
+_ACT_STEEPNESS = (10.0, 2.0)   # 클수록 경계가 선명, 작을수록 완만
+_ACT_ANCHORS   = (3.0,  1.0, 0.3)  # stationary / walking / vehicle multiplier
 
 SLC_THRESHOLD_M = 500
 SLC_MULTIPLIER  = 2.0
@@ -102,10 +101,9 @@ def _cosine_blend_interval(
     return raw, u_dist, u_time, urgency
 
 
-def estimate_activity(history: list[LocationPoint]) -> ActivityType:
+def _compute_avg_speed(history: list[LocationPoint]) -> Optional[float]:
     if len(history) < 2:
-        return "unknown"
-
+        return None
     speeds = []
     for i in range(1, len(history)):
         prev, curr = history[i - 1], history[i]
@@ -113,11 +111,33 @@ def estimate_activity(history: list[LocationPoint]) -> ActivityType:
         dt = (curr.timestamp - prev.timestamp).total_seconds()
         if dt > 0:
             speeds.append(dist / dt)
+    return sum(speeds) / len(speeds) if speeds else None
 
-    if not speeds:
+
+def smooth_activity_multiplier(avg_speed: float) -> float:
+    """
+    속도(m/s)를 sigmoid 두 개로 부드럽게 multiplier에 매핑.
+
+    경계:  0.5 m/s (stationary→walking),  8.0 m/s (walking→vehicle)
+    anchors: 3.0 → 1.0 → 0.3
+    공식:  mult = m0 - (m0-m1)*s1 - (m1-m2)*s2
+    """
+    v1, v2 = _ACT_BOUNDARY
+    k1, k2 = _ACT_STEEPNESS
+    m0, m1, m2 = _ACT_ANCHORS
+
+    def _sigmoid(x: float) -> float:
+        return 1.0 / (1.0 + math.exp(-max(-500.0, min(500.0, x))))
+
+    s1 = _sigmoid(k1 * (avg_speed - v1))
+    s2 = _sigmoid(k2 * (avg_speed - v2))
+    return m0 - (m0 - m1) * s1 - (m1 - m2) * s2
+
+
+def estimate_activity(history: list[LocationPoint]) -> ActivityType:
+    avg_speed = _compute_avg_speed(history)
+    if avg_speed is None:
         return "unknown"
-
-    avg_speed = sum(speeds) / len(speeds)
     if avg_speed < 0.5:
         return "stationary"
     elif avg_speed < 8.0:
@@ -168,7 +188,8 @@ def calculate_next_interval(
         min_fence_distance = 9999.0
 
     activity = estimate_activity(history)
-    act_mult = ACTIVITY_MULTIPLIER[activity]
+    avg_speed = _compute_avg_speed(history) or 0.0
+    act_mult = smooth_activity_multiplier(avg_speed)
 
     is_significant, moved_dist = detect_significant_change(history)
     slc_mult = 1.0
