@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
+from gps_api.core import cache as _cache
 from gps_api.core.db_client import DBClient
 from gps_api.core.kakao_route import fetch_route
 from gps_api.core.latency import recommended_buffer
@@ -82,13 +83,15 @@ class Journey:
 
 def _get_buffer_minutes(member_id: str) -> float:
     """
-    1순위: DB 멤버 설정의 '여유 시간'
-    2순위: 과거 지각 기록 기반 계산값 (recommended_buffer)
+    1순위: 캐시된 멤버 설정의 '여유 시간' (DB Webhook으로 Push된 값)
+    2순위: DB 멤버 설정 직접 조회 (캐시 미스 fallback)
+    3순위: 과거 지각 기록 기반 계산값 (recommended_buffer)
     """
-    if _db:
+    settings = _cache.get_member_settings(member_id)
+    if settings is None and _db:
         settings = _db.get_member_settings(member_id)
-        if settings and settings.get("buffer_minutes") is not None:
-            return float(settings["buffer_minutes"])
+    if settings and settings.get("buffer_minutes") is not None:
+        return float(settings["buffer_minutes"])
     return recommended_buffer(member_id)
 
 
@@ -157,13 +160,16 @@ def compute_eta(journey: Journey, kakao_api_key: str = "") -> Journey:
 # ------------------------------------------------------------------
 
 def get_journey(journey_id: str) -> Optional[Journey]:
-    if not _db:
-        return None
-    raw = _db.get_journey(journey_id)
+    raw = _cache.get_journey(journey_id)
+    if raw is None and _db:
+        raw = _db.get_journey(journey_id)
     return _from_db(raw) if raw else None
 
 
 def get_member_journeys(member_id: str) -> list[Journey]:
+    cached = _cache.get_member_journeys(member_id)
+    if cached is not None:
+        return [_from_db(r) for r in cached]
     if not _db:
         return []
     return [_from_db(r) for r in _db.get_member_journeys(member_id)]
@@ -179,10 +185,9 @@ def update_location(
     위치를 업데이트하고 ETA를 재계산한다.
     DB 연결 시 결과를 write-back한다.
     """
-    if not _db:
-        return None
-
-    raw = _db.get_journey(journey_id)
+    raw = _cache.get_journey(journey_id)
+    if raw is None and _db:
+        raw = _db.get_journey(journey_id)
     if not raw:
         return None
 
@@ -192,14 +197,15 @@ def update_location(
 
     compute_eta(journey, kakao_api_key)
 
-    _db.update_journey(
-        journey_id,
-        current_lat=lat,
-        current_lon=lon,
-        eta=journey.eta_sec,
-        alarm_time=journey.alarm_time,
-        status=journey.status,
-    )
+    if _db:
+        _db.update_journey(
+            journey_id,
+            current_lat=lat,
+            current_lon=lon,
+            eta=journey.eta_sec,
+            alarm_time=journey.alarm_time,
+            status=journey.status,
+        )
 
     return to_dict(journey)
 

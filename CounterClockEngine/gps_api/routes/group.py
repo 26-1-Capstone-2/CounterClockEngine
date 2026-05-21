@@ -10,14 +10,17 @@ REST:
   DELETE /api/group/<id>/leave          — 그룹 탈퇴
 
 WebSocket:
-  client → server : emit("join_group", {"group_id": "..."})
-  server → client : emit("group_update", {group_summary})
+  client → server : emit("join_group",  {"group_id": "..."})
+  server → client : emit("group_update", {group_summary})          — 그룹 전체 ETA 현황
+  client → server : emit("join_member", {"member_id": "..."})      — 개인 room 입장
+  server → client : emit("request_gps", {"group_id", "next_interval_sec", "gps_mode"})
+                                                                    — GPS 신호 전송 요청
 """
 
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, abort
-from flask_socketio import join_room
+from flask_socketio import join_room, emit as ws_emit
 
 from gps_api.core import group as group_core
 from gps_api.extensions import socketio
@@ -124,13 +127,13 @@ def create():
             abort(400, description=f"{f} field is required.")
 
     group = group_core.create_group(
-        name=body["name"],
+        title=body["name"],
         destination=_parse_loc(body["destination"], "destination"),
         appointment_time=_parse_dt(body["appointment_time"]),
     )
     return jsonify({
         "group_id": group.group_id,
-        "name": group.name,
+        "name": group.title,
         "destination": list(group.destination),
         "appointment_time": group.appointment_time.isoformat(),
     }), 201
@@ -202,11 +205,21 @@ def update_location(group_id: str):
     curr = _parse_loc(body["current_loc"], "current_loc")
     kakao_key = body.get("kakao_api_key", "")
 
-    summary = group_core.update_location(group_id, body["user_id"], curr[0], curr[1], kakao_key)
-    if summary is None:
+    result = group_core.update_location(group_id, body["user_id"], curr[0], curr[1], kakao_key)
+    if result is None:
         abort(404, description="Group or user not found.")
 
+    summary, gps_intervals = result
     socketio.emit("group_update", summary, room=group_id)
+
+    # 각 참가자 개인 room으로 GPS 재전송 트리거를 emit
+    for mid, interval_info in gps_intervals.items():
+        socketio.emit(
+            "request_gps",
+            {"group_id": group_id, **interval_info},
+            room=f"member:{mid}",
+        )
+
     return jsonify(summary)
 
 
@@ -285,3 +298,17 @@ def handle_join_group(data):
     group = group_core.get_group(group_id)
     if group:
         socketio.emit("group_update", group_core.get_group_summary(group), room=group_id)
+
+
+@socketio.on("join_member")
+def handle_join_member(data):
+    """
+    클라이언트가 개인 room에 입장합니다.
+    이후 서버가 GPS 신호를 보내라는 request_gps 이벤트를 이 room으로 emit합니다.
+
+    emit("join_member", {"member_id": "..."})
+    """
+    member_id = data.get("member_id")
+    if not member_id:
+        return
+    join_room(f"member:{member_id}")

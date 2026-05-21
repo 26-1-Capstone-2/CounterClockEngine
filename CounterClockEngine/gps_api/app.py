@@ -11,6 +11,7 @@ from .routes.appointment import bp as appointment_bp
 from .routes.group import bp as group_bp
 from .routes.latency import bp as latency_bp
 from .routes.journey import bp as journey_bp
+from .routes.webhook import bp as webhook_bp
 
 
 def create_app() -> Flask:
@@ -19,7 +20,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    socketio.init_app(app, cors_allowed_origins="*")
+    socketio.init_app(app, cors_allowed_origins="*", async_mode="threading")
 
     # 외부 DB 서버 연결 (DB_BASE_URL 설정 시 활성화)
     if app.config.get("DB_BASE_URL"):
@@ -38,6 +39,7 @@ def create_app() -> Flask:
     app.register_blueprint(group_bp,       url_prefix="/api/group")
     app.register_blueprint(latency_bp,     url_prefix="/api/latency")
     app.register_blueprint(journey_bp,     url_prefix="/api/journey")
+    app.register_blueprint(webhook_bp,     url_prefix="/webhook")
 
     @app.get("/health")
     def health():
@@ -92,9 +94,14 @@ def create_app() -> Flask:
                 "websocket": {
                     "join_group":    "emit('join_group', {group_id}) → 그룹 room 입장",
                     "group_update":  "on('group_update', callback) → 그룹 ETA 현황 수신",
+                    "join_member":   "emit('join_member', {member_id}) → 개인 room 입장",
+                    "request_gps":   "on('request_gps', callback) → GPS 전송 트리거 수신 (next_interval_sec, gps_mode)",
                     "join_journey":  "emit('join_journey', {journey_id}) → 여정 room 입장",
                     "journey_update": "on('journey_update', callback) → 개인 ETA 수신",
                 },
+                "webhook": [
+                    "POST /webhook/db-sync  (type: appointment | participant | participants)",
+                ],
             },
         })
 
