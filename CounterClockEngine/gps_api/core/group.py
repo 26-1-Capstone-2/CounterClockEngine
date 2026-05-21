@@ -237,6 +237,7 @@ def _fetch_eta(
 def compute_gps_interval(
     participant: Participant,
     destination: tuple[float, float],
+    appointment_time: Optional[datetime] = None,
 ) -> dict:
     """참여자의 현재 위치·ETA를 바탕으로 다음 GPS 갱신 주기와 모드를 계산한다."""
     dest_lat, dest_lon = destination
@@ -250,11 +251,17 @@ def compute_gps_interval(
     if participant.current_lat is None:
         return {"next_interval_sec": 60, "gps_mode": "BALANCED"}
 
+    appointment_remaining_sec: Optional[float] = None
+    if appointment_time is not None:
+        appointment_remaining_sec = max((appointment_time - datetime.now()).total_seconds(), 0.0)
+
     result = calculate_next_interval(
         user_lat=participant.current_lat,
         user_lon=participant.current_lon,
         history=history,
         geofences=geofences,
+        eta_sec=participant.eta_sec,
+        appointment_remaining_sec=appointment_remaining_sec,
     )
     return {
         "next_interval_sec": result.next_interval,
@@ -319,7 +326,7 @@ def _update_location_memory(
     )
 
     intervals = {
-        mid: compute_gps_interval(p, group.destination)
+        mid: compute_gps_interval(p, group.destination, group.appointment_time)
         for mid, p in group.participants.items()
     }
     return get_group_summary(group), intervals
@@ -361,7 +368,7 @@ def _update_location_db(
     group.participants = {p.member_id: p for p in participants}
 
     intervals = {
-        p.member_id: compute_gps_interval(p, group.destination)
+        p.member_id: compute_gps_interval(p, group.destination, group.appointment_time)
         for p in participants
     }
     return get_group_summary(group), intervals

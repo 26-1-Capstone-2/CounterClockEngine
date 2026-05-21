@@ -199,6 +199,7 @@ GET /health
 
 #### `POST /api/group/<group_id>/arrive` — 도착 처리
 
+
 **Request**
 
 ```json

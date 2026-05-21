@@ -1,6 +1,6 @@
 """
 GPS/Geofencing 배터리 최적화 핵심 로직
-- 거리 기반 Adaptive Interval
+- 거리·시간 Cosine Blend Interval
 - Activity Recognition 유사 구현
 - Significant Location Change 유사 구현
 """
@@ -8,7 +8,7 @@ GPS/Geofencing 배터리 최적화 핵심 로직
 import math
 from datetime import datetime
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Optional
 
 ActivityType = Literal["stationary", "walking", "vehicle", "unknown"]
 GPSMode = Literal["LOW", "BALANCED", "HIGH"]
@@ -38,9 +38,11 @@ class OptimizationResult:
     distance_to_nearest_fence: float
     gps_mode: GPSMode
     entered_zones: list[str]
-    base_interval: int
     activity_multiplier: float
     slc_multiplier: float
+    u_dist: float       # 거리 긴급도 [0=멀리, 1=근접]
+    u_time: float       # 시간 긴급도 [0=여유, 1=촉박]
+    urgency: float      # 최종 긴급도 [0=여유, 1=매우 긴박]
 
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -52,16 +54,12 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def get_base_interval(distance_to_fence: float) -> int:
-    if distance_to_fence <= 200:
-        return 3
-    elif distance_to_fence <= 500:
-        return 10
-    elif distance_to_fence <= 1000:
-        return 30
-    else:
-        return 60
-
+# ── Cosine Blend 파라미터 ─────────────────────────────────────────
+INTERVAL_MIN_S  = 3      # urgency=1 일 때 최소 간격 (초)
+INTERVAL_MAX_S  = 300    # urgency=0 일 때 최대 간격 (초)
+D_MAX_M         = 3000.0 # 이 거리 이상은 거리 긴급도=0 처리
+TIME_ALPHA      = 0.5    # 0=시간만, 1=거리만 (0.5: 균등 혼합)
+# ────────────────────────────────────────────────────────────────
 
 ACTIVITY_MULTIPLIER = {
     "stationary": 3.0,
@@ -72,7 +70,36 @@ ACTIVITY_MULTIPLIER = {
 
 SLC_THRESHOLD_M = 500
 SLC_MULTIPLIER  = 2.0
-MAX_INTERVAL_S  = 300
+
+
+def _cosine_blend_interval(
+    distance_to_fence: float,
+    eta_sec: Optional[float],
+    appointment_remaining_sec: Optional[float],
+    alpha: float = TIME_ALPHA,
+) -> tuple[float, float, float, float]:
+    """
+    두 긴급도 신호를 cosine 곡선으로 혼합해 raw interval(초)을 반환.
+    Returns: (raw_interval, u_dist, u_time, urgency)
+
+    urgency=0 → INTERVAL_MAX_S,  urgency=1 → INTERVAL_MIN_S
+    """
+    # 거리 긴급도: 목적지에 가까울수록 1
+    d_clamped = max(0.0, min(distance_to_fence, D_MAX_M))
+    u_dist = 1.0 - d_clamped / D_MAX_M
+
+    # 시간 긴급도: eta가 남은 약속 시간 대비 클수록 1
+    if eta_sec is not None and appointment_remaining_sec and appointment_remaining_sec > 0:
+        u_time = min(max(eta_sec / appointment_remaining_sec, 0.0), 1.0)
+    else:
+        u_time = u_dist  # 시간 정보 없으면 거리 긴급도로 대체
+
+    urgency = alpha * u_dist + (1.0 - alpha) * u_time
+    urgency = max(0.0, min(1.0, urgency))
+
+    # cosine 곡선: urgency 0→1 일 때 interval MAX→MIN
+    raw = INTERVAL_MIN_S + 0.5 * (INTERVAL_MAX_S - INTERVAL_MIN_S) * (1.0 + math.cos(math.pi * urgency))
+    return raw, u_dist, u_time, urgency
 
 
 def estimate_activity(history: list[LocationPoint]) -> ActivityType:
@@ -124,6 +151,8 @@ def calculate_next_interval(
     user_lon: float,
     history: list[LocationPoint],
     geofences: list[Geofence],
+    eta_sec: Optional[float] = None,
+    appointment_remaining_sec: Optional[float] = None,
 ) -> OptimizationResult:
     entered_zones = []
     min_fence_distance = float("inf")
@@ -138,7 +167,6 @@ def calculate_next_interval(
     if min_fence_distance == float("inf"):
         min_fence_distance = 9999.0
 
-    base = get_base_interval(min_fence_distance)
     activity = estimate_activity(history)
     act_mult = ACTIVITY_MULTIPLIER[activity]
 
@@ -147,8 +175,11 @@ def calculate_next_interval(
     if not is_significant and activity == "stationary":
         slc_mult = SLC_MULTIPLIER
 
-    raw = base * act_mult * slc_mult
-    next_interval = max(int(min(round(raw), MAX_INTERVAL_S)), 1)
+    raw_base, u_dist, u_time, urgency = _cosine_blend_interval(
+        min_fence_distance, eta_sec, appointment_remaining_sec
+    )
+    raw = raw_base * act_mult * slc_mult
+    next_interval = max(int(min(round(raw), INTERVAL_MAX_S)), 1)
 
     return OptimizationResult(
         next_interval=next_interval,
@@ -158,7 +189,9 @@ def calculate_next_interval(
         distance_to_nearest_fence=round(min_fence_distance, 1),
         gps_mode=classify_gps_mode(next_interval),
         entered_zones=entered_zones,
-        base_interval=base,
         activity_multiplier=act_mult,
         slc_multiplier=slc_mult,
+        u_dist=round(u_dist, 3),
+        u_time=round(u_time, 3),
+        urgency=round(urgency, 3),
     )

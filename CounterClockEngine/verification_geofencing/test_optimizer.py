@@ -1,6 +1,6 @@
 """
 단위 테스트: next_interval 계산 로직 정확성 검증
-- 거리 기반 Adaptive Interval
+- Cosine Blend Interval (거리 + 시간 긴급도)
 - Activity Recognition
 - Significant Location Change
 - 통합 계산 (계산 예시 시나리오 포함)
@@ -13,25 +13,25 @@ from datetime import datetime, timedelta
 
 sys.path.insert(0, ".")
 from optimizer import (
-    haversine, get_base_interval, estimate_activity,
+    haversine, estimate_activity,
     detect_significant_change, calculate_next_interval,
     classify_gps_mode, LocationPoint, Geofence,
-    SLC_THRESHOLD_M, MAX_INTERVAL_S,
+    SLC_THRESHOLD_M, INTERVAL_MIN_S, INTERVAL_MAX_S, D_MAX_M, TIME_ALPHA,
+    _cosine_blend_interval,
 )
 
 
 # ── 헬퍼: 위치 이력 생성 ──────────────────────────────────────
 def make_history(points: list[tuple], interval_sec: int = 10) -> list[LocationPoint]:
-    """(lat, lon) 리스트로 LocationPoint 이력 생성"""
     base_time = datetime(2026, 5, 11, 9, 0, 0)
     return [
         LocationPoint(lat, lon, base_time + timedelta(seconds=i * interval_sec))
         for i, (lat, lon) in enumerate(points)
     ]
 
-GANGNAM  = (37.5012, 127.0276)   # 강남역 (현재 위치)
-SAMSUNG_CENTER = (37.5088, 127.0456)  # 삼성역 방향 존 (Geofence 중심, 약 360m)
-SAMSUNG_RADIUS = 200             # Geofence 반경 (m)
+GANGNAM  = (37.5012, 127.0276)
+SAMSUNG_CENTER = (37.5088, 127.0456)
+SAMSUNG_RADIUS = 200
 
 SAMSUNG_FENCE = Geofence(
     id="samsung_station",
@@ -50,7 +50,6 @@ class TestHaversine(unittest.TestCase):
         self.assertAlmostEqual(haversine(37.5, 127.0, 37.5, 127.0), 0.0, places=2)
 
     def test_gangnam_to_samsung_approx_360m(self):
-        # 위도 0.003도 ≈ 333m, 경도 0.002도 ≈ 185m → 합산 약 380m
         p1 = (37.5000, 127.0000)
         p2 = (37.5030, 127.0020)
         dist = haversine(*p1, *p2)
@@ -63,41 +62,77 @@ class TestHaversine(unittest.TestCase):
         self.assertAlmostEqual(d1, d2, places=5)
 
     def test_1km_north(self):
-        """위도 약 0.009도 ≈ 1km"""
         dist = haversine(37.5, 127.0, 37.509, 127.0)
         self.assertGreater(dist, 900)
         self.assertLess(dist, 1100)
 
 
 # ══════════════════════════════════════════════════════════════
-# 2. 거리 기반 Adaptive Interval
+# 2. Cosine Blend Interval
 # ══════════════════════════════════════════════════════════════
-class TestBaseInterval(unittest.TestCase):
+class TestCosineBlend(unittest.TestCase):
 
-    def test_inside_zone_is_3s(self):
-        """존 내부 (거리 음수) → 3초"""
-        self.assertEqual(get_base_interval(-50), 3)
+    def test_urgency_zero_gives_max_interval(self):
+        """긴급도=0 (아주 멀리, 시간 충분) → INTERVAL_MAX_S"""
+        raw, u_dist, u_time, urgency = _cosine_blend_interval(
+            distance_to_fence=D_MAX_M,
+            eta_sec=10.0,
+            appointment_remaining_sec=3600.0,
+        )
+        self.assertAlmostEqual(urgency, 0.0, places=1)
+        self.assertAlmostEqual(raw, INTERVAL_MAX_S, delta=5)
 
-    def test_200m_boundary_is_3s(self):
-        self.assertEqual(get_base_interval(200), 3)
+    def test_urgency_one_gives_min_interval(self):
+        """긴급도=1 (바로 앞, ETA=남은시간) → INTERVAL_MIN_S"""
+        raw, u_dist, u_time, urgency = _cosine_blend_interval(
+            distance_to_fence=0.0,
+            eta_sec=60.0,
+            appointment_remaining_sec=60.0,
+        )
+        self.assertAlmostEqual(urgency, 1.0, places=1)
+        self.assertAlmostEqual(raw, INTERVAL_MIN_S, delta=1)
 
-    def test_201m_is_10s(self):
-        self.assertEqual(get_base_interval(201), 10)
+    def test_urgency_in_valid_range(self):
+        """긴급도는 항상 [0, 1] 범위"""
+        cases = [
+            (0.0, 0.0, 0.0),
+            (500.0, 300.0, 600.0),
+            (D_MAX_M * 2, 10.0, 3600.0),   # 거리 초과
+            (100.0, 9999.0, 60.0),          # eta > appointment
+        ]
+        for d, eta, appt in cases:
+            _, _, _, urgency = _cosine_blend_interval(d, eta, appt)
+            self.assertGreaterEqual(urgency, 0.0, msg=f"case {d},{eta},{appt}")
+            self.assertLessEqual(urgency, 1.0, msg=f"case {d},{eta},{appt}")
 
-    def test_500m_boundary_is_10s(self):
-        self.assertEqual(get_base_interval(500), 10)
+    def test_interval_monotone_with_distance(self):
+        """거리가 멀어질수록 interval이 길어짐"""
+        distances = [50, 200, 500, 1000, 2000]
+        intervals = [_cosine_blend_interval(d, None, None)[0] for d in distances]
+        for i in range(len(intervals) - 1):
+            self.assertLessEqual(intervals[i], intervals[i + 1],
+                msg=f"interval should increase: d={distances[i]}→{distances[i+1]}")
 
-    def test_501m_is_30s(self):
-        self.assertEqual(get_base_interval(501), 30)
+    def test_time_urgency_without_info_mirrors_distance(self):
+        """시간 정보 없으면 u_time == u_dist"""
+        _, u_dist, u_time, _ = _cosine_blend_interval(800.0, None, None)
+        self.assertAlmostEqual(u_dist, u_time, places=6)
 
-    def test_1000m_boundary_is_30s(self):
-        self.assertEqual(get_base_interval(1000), 30)
+    def test_time_urgency_high_eta_ratio(self):
+        """eta가 약속 시간 전체와 같으면 u_time=1 (매우 촉박)"""
+        _, _, u_time, _ = _cosine_blend_interval(1000.0, 600.0, 600.0)
+        self.assertAlmostEqual(u_time, 1.0, places=3)
 
-    def test_1001m_is_60s(self):
-        self.assertEqual(get_base_interval(1001), 60)
+    def test_time_urgency_low_eta_ratio(self):
+        """eta가 약속 시간의 10%면 u_time이 낮음 (여유 있음)"""
+        _, _, u_time, _ = _cosine_blend_interval(1000.0, 60.0, 600.0)
+        self.assertAlmostEqual(u_time, 0.1, places=3)
 
-    def test_5km_is_60s(self):
-        self.assertEqual(get_base_interval(5000), 60)
+    def test_alpha_weight_balance(self):
+        """alpha=1.0 이면 urgency == u_dist"""
+        _, u_dist, _, _ = _cosine_blend_interval(500.0, None, None, alpha=1.0)
+        _, _, _, urgency = _cosine_blend_interval(500.0, None, None, alpha=1.0)
+        self.assertAlmostEqual(urgency, u_dist, places=5)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -110,31 +145,23 @@ class TestActivityRecognition(unittest.TestCase):
         self.assertEqual(estimate_activity(history), "unknown")
 
     def test_no_movement_is_stationary(self):
-        """같은 위치 반복 → 정지"""
         history = make_history([GANGNAM] * 5)
         self.assertEqual(estimate_activity(history), "stationary")
 
     def test_slow_movement_is_walking(self):
-        """약 1 m/s 이동 → 도보"""
-        # 10초마다 약 10m 이동 (위도 0.00009도 ≈ 10m)
         points = [(37.5012 + i * 0.00009, 127.0300) for i in range(5)]
         history = make_history(points, interval_sec=10)
         self.assertEqual(estimate_activity(history), "walking")
 
     def test_fast_movement_is_vehicle(self):
-        """약 10 m/s 이동 → 차량"""
-        # 10초마다 약 100m 이동 (위도 0.0009도 ≈ 100m)
         points = [(37.5012 + i * 0.0009, 127.0300) for i in range(5)]
         history = make_history(points, interval_sec=10)
         self.assertEqual(estimate_activity(history), "vehicle")
 
     def test_bus_scenario_is_vehicle(self):
-        """버스 시나리오: 강남→삼성 구간 이동 → 차량"""
         points = [
-            (37.4980, 127.0210),
-            (37.4990, 127.0240),
-            (37.5000, 127.0270),
-            (37.5008, 127.0290),
+            (37.4980, 127.0210), (37.4990, 127.0240),
+            (37.5000, 127.0270), (37.5008, 127.0290),
             (37.5012, 127.0300),
         ]
         history = make_history(points, interval_sec=10)
@@ -153,34 +180,28 @@ class TestSLC(unittest.TestCase):
         self.assertEqual(dist, 0.0)
 
     def test_no_movement_is_not_significant(self):
-        """이동 없음 → False"""
         history = make_history([GANGNAM] * 5)
         is_sig, dist = detect_significant_change(history)
         self.assertFalse(is_sig)
         self.assertLess(dist, SLC_THRESHOLD_M)
 
     def test_200m_movement_is_not_significant(self):
-        """200m 이동 → False (기준 500m)"""
-        points = [GANGNAM, (37.5012 + 0.0018, 127.0300)]  # 약 200m
+        points = [GANGNAM, (37.5012 + 0.0018, 127.0300)]
         history = make_history(points)
-        is_sig, dist = detect_significant_change(history)
+        is_sig, _ = detect_significant_change(history)
         self.assertFalse(is_sig)
 
     def test_800m_movement_is_significant(self):
-        """800m 이동 → True"""
-        points = [GANGNAM, (37.5012 + 0.0072, 127.0300)]  # 약 800m
+        points = [GANGNAM, (37.5012 + 0.0072, 127.0300)]
         history = make_history(points)
         is_sig, dist = detect_significant_change(history)
         self.assertTrue(is_sig)
         self.assertGreater(dist, SLC_THRESHOLD_M)
 
     def test_bus_scenario_820m_is_significant(self):
-        """버스 시나리오: t-4에서 t-0까지 약 820m → True"""
         points = [
-            (37.4980, 127.0210),
-            (37.4990, 127.0240),
-            (37.5000, 127.0270),
-            (37.5008, 127.0290),
+            (37.4980, 127.0210), (37.4990, 127.0240),
+            (37.5000, 127.0270), (37.5008, 127.0290),
             (37.5012, 127.0300),
         ]
         history = make_history(points, interval_sec=10)
@@ -189,8 +210,7 @@ class TestSLC(unittest.TestCase):
         self.assertGreater(dist, 500)
 
     def test_custom_threshold(self):
-        """커스텀 임계값 적용"""
-        points = [GANGNAM, (37.5012 + 0.0018, 127.0300)]  # 약 200m
+        points = [GANGNAM, (37.5012 + 0.0018, 127.0300)]
         history = make_history(points)
         is_sig, _ = detect_significant_change(history, threshold=100)
         self.assertTrue(is_sig)
@@ -202,131 +222,110 @@ class TestSLC(unittest.TestCase):
 class TestIntegration(unittest.TestCase):
 
     def _make_bus_history(self):
-        """버스 시나리오: 삼성역 존 방향으로 빠르게 이동 (경계 160m 앞 도착)"""
-        # SAMSUNG_CENTER=(37.5088, 127.0456), radius=200m
-        # 목적지: 경계까지 ~160m → 존 중심까지 ~360m
-        # 10초마다 약 100m 이동 (9~10 m/s = 차량)
+        """버스 시나리오: 삼성역 존 방향으로 빠르게 이동 (경계 ~200m 앞 도착)"""
         points = [
-            (37.5012, 127.0276),   # 출발 (존까지 ~2km)
-            (37.5030, 127.0310),
-            (37.5048, 127.0344),
-            (37.5062, 127.0378),
-            (37.5073, 127.0415),   # 도착 (존 경계까지 약 160m)
+            (37.5012, 127.0276), (37.5030, 127.0310),
+            (37.5048, 127.0344), (37.5062, 127.0378),
+            (37.5073, 127.0415),
         ]
         return make_history(points, interval_sec=10)
 
     def _make_stationary_history(self):
-        """정지 시나리오: 존 경계까지 약 160m, 이동 없음"""
+        """정지 시나리오: 존 경계까지 약 200m, 이동 없음"""
         near_fence = (37.5073, 127.0415)
         return make_history([near_fence] * 5)
 
-    def test_bus_scenario_base_interval(self):
-        """버스: 경계 ~160m → base=3초"""
-        result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_bus_history(), [SAMSUNG_FENCE]
-        )
-        self.assertEqual(result.base_interval, 3)
-
     def test_bus_scenario_activity_is_vehicle(self):
         result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_bus_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_bus_history(), [SAMSUNG_FENCE]
         )
         self.assertEqual(result.activity, "vehicle")
 
     def test_bus_scenario_activity_multiplier(self):
         result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_bus_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_bus_history(), [SAMSUNG_FENCE]
         )
         self.assertAlmostEqual(result.activity_multiplier, 0.3)
 
     def test_bus_scenario_slc_is_significant(self):
         result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_bus_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_bus_history(), [SAMSUNG_FENCE]
         )
         self.assertTrue(result.is_significant_change)
         self.assertAlmostEqual(result.slc_multiplier, 1.0)
 
-    def test_bus_scenario_final_interval_is_1s(self):
-        """버스: 3초 × 0.3 × 1.0 = 0.9 ≈ 1초"""
+    def test_bus_scenario_high_urgency_near_fence(self):
+        """버스 + 경계 근접 → 긴급도 높고(>0.8), interval 짧음(<10s)"""
         result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_bus_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_bus_history(), [SAMSUNG_FENCE]
         )
-        self.assertEqual(result.next_interval, 1)
+        self.assertGreater(result.urgency, 0.8)
+        self.assertLess(result.next_interval, 10)
         self.assertEqual(result.gps_mode, "HIGH")
 
     def test_stationary_scenario_activity_is_stationary(self):
         result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_stationary_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_stationary_history(), [SAMSUNG_FENCE]
         )
         self.assertEqual(result.activity, "stationary")
 
     def test_stationary_scenario_slc_not_significant(self):
         result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_stationary_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_stationary_history(), [SAMSUNG_FENCE]
         )
         self.assertFalse(result.is_significant_change)
         self.assertAlmostEqual(result.slc_multiplier, 2.0)
 
-    def test_stationary_scenario_final_interval_is_18s(self):
-        """정지: base 3초 × 3.0 × 2.0 = 18초 (존 경계 160m, 정지, SLC 미감지)"""
-        result = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_stationary_history(),
-            [SAMSUNG_FENCE],
-        )
-        # 경계까지 거리가 200m 이내여야 base=3초
-        self.assertLessEqual(result.distance_to_nearest_fence, 200)
-        self.assertEqual(result.base_interval, 3)
-        self.assertEqual(result.next_interval, 18)
-
-    def test_bus_vs_stationary_ratio(self):
-        """정지(18초) / 버스(1초) = 18배 차이"""
+    def test_stationary_scenario_interval_longer_than_bus(self):
+        """정지 interval이 버스 interval보다 훨씬 김 (최소 5배)"""
         bus = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_bus_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_bus_history(), [SAMSUNG_FENCE]
         )
         still = calculate_next_interval(
-            37.5073, 127.0415,
-            self._make_stationary_history(), [SAMSUNG_FENCE]
+            37.5073, 127.0415, self._make_stationary_history(), [SAMSUNG_FENCE]
         )
-        self.assertEqual(bus.next_interval, 1)
-        self.assertEqual(still.next_interval, 18)
-        self.assertEqual(still.next_interval / bus.next_interval, 18)
+        self.assertGreater(still.next_interval, bus.next_interval * 5)
 
-    # ── 경계 케이스 ──
+    def test_time_urgency_increases_frequency(self):
+        """ETA가 약속 시간에 촉박할수록 interval이 줄어듦 (multiplier 누적 방지를 위해 vehicle 히스토리 사용)"""
+        # vehicle 히스토리: activity_multiplier=0.3, SLC significant → slc_mult=1.0
+        # → 총 배율이 작아 300s 캡에 걸리지 않음
+        points = [(37.5012 + i * 0.0009, 127.0276) for i in range(6)]
+        history = make_history(points, interval_sec=10)
+        fence_mid = Geofence("mid", 37.52, 127.03, 100)
+
+        # 여유 있음: eta 20분, 약속 3시간
+        result_relaxed = calculate_next_interval(
+            *GANGNAM, history, [fence_mid],
+            eta_sec=1200, appointment_remaining_sec=10800,
+        )
+        # 촉박: eta 20분, 약속 22분
+        result_urgent = calculate_next_interval(
+            *GANGNAM, history, [fence_mid],
+            eta_sec=1200, appointment_remaining_sec=1320,
+        )
+        self.assertGreater(result_relaxed.next_interval, result_urgent.next_interval)
+        self.assertLess(result_relaxed.u_time, result_urgent.u_time)
+
     def test_max_interval_cap(self):
         """최대 300초 이상 넘지 않음"""
-        # 10km 이상 거리 + 정지
         far_fence = Geofence("far", 37.5012 + 0.1, 127.0300, 100)
         result = calculate_next_interval(
             *GANGNAM, self._make_stationary_history(), [far_fence]
         )
-        self.assertLessEqual(result.next_interval, MAX_INTERVAL_S)
+        self.assertLessEqual(result.next_interval, INTERVAL_MAX_S)
 
     def test_inside_geofence_detected(self):
-        """존 내부 진입 감지"""
-        inside_point = (SAMSUNG_CENTER[0], SAMSUNG_CENTER[1])  # 존 중심
+        inside_point = (SAMSUNG_CENTER[0], SAMSUNG_CENTER[1])
         history = make_history([inside_point] * 3)
-        result = calculate_next_interval(
-            *inside_point, history, [SAMSUNG_FENCE]
-        )
+        result = calculate_next_interval(*inside_point, history, [SAMSUNG_FENCE])
         self.assertIn("samsung_station", result.entered_zones)
 
     def test_multiple_geofences(self):
-        """복수 Geofence 중 가장 가까운 거리 사용"""
         fence_far  = Geofence("far",  37.6000, 127.0300, 100)
         fence_near = Geofence("near", 37.5020, 127.0300, 100)
         result = calculate_next_interval(
-            *GANGNAM,
-            make_history([GANGNAM] * 3),
-            [fence_far, fence_near],
+            *GANGNAM, make_history([GANGNAM] * 3), [fence_far, fence_near],
         )
         self.assertLess(result.distance_to_nearest_fence, 500)
 
@@ -338,6 +337,17 @@ class TestIntegration(unittest.TestCase):
         self.assertEqual(classify_gps_mode(30), "LOW")
         self.assertEqual(classify_gps_mode(60), "LOW")
 
+    def test_result_has_cosine_debug_fields(self):
+        """OptimizationResult에 u_dist, u_time, urgency 포함"""
+        result = calculate_next_interval(
+            *GANGNAM, make_history([GANGNAM] * 2), [SAMSUNG_FENCE]
+        )
+        self.assertTrue(hasattr(result, "u_dist"))
+        self.assertTrue(hasattr(result, "u_time"))
+        self.assertTrue(hasattr(result, "urgency"))
+        self.assertGreaterEqual(result.urgency, 0.0)
+        self.assertLessEqual(result.urgency, 1.0)
+
 
 # ══════════════════════════════════════════════════════════════
 # 실행
@@ -345,7 +355,7 @@ class TestIntegration(unittest.TestCase):
 if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite  = unittest.TestSuite()
-    for cls in [TestHaversine, TestBaseInterval, TestActivityRecognition,
+    for cls in [TestHaversine, TestCosineBlend, TestActivityRecognition,
                 TestSLC, TestIntegration]:
         suite.addTests(loader.loadTestsFromTestCase(cls))
 

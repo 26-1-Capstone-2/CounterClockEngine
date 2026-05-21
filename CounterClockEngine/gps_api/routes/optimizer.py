@@ -102,7 +102,9 @@ def get_interval():
         "distance_to_nearest_fence": result.distance_to_nearest_fence,
         "entered_zones": result.entered_zones,
         "debug": {
-            "base_interval": result.base_interval,
+            "u_dist": result.u_dist,
+            "u_time": result.u_time,
+            "urgency": result.urgency,
             "activity_multiplier": result.activity_multiplier,
             "slc_multiplier": result.slc_multiplier,
         },
