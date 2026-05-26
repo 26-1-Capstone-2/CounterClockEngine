@@ -13,6 +13,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# .env를 반드시 app 모듈 import 전에 로드해야
+# Config 클래스의 os.getenv()가 올바른 값을 읽는다.
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+
 from gps_api.app import create_app
 from gps_api.extensions import socketio
 
