@@ -111,6 +111,7 @@ def create_app() -> Flask:
                 ],
                 "internal": [
                     "POST /internal/alarm/appointment",
+                    "POST /internal/alarm/journey",
                 ],
             },
         })
