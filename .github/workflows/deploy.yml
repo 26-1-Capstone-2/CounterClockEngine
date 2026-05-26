@@ -49,4 +49,5 @@ jobs:
               -p 5000:5000 \
               --restart unless-stopped \
               -e KAKAO_API_KEY=${{ secrets.KAKAO_API_KEY }} \
+              -e ODSAY_API_KEY=${{ secrets.ODSAY_API_KEY }} \
               ${{ secrets.DOCKER_USERNAME }}/davidjk522:cap2flask
