@@ -13,6 +13,7 @@ import requests
 KAKAO_DIRECTION_URL = "https://apis-navi.kakaomobility.com/v1/directions"
 
 
+
 def fetch_route(
     origin_lat: float,
     origin_lon: float,

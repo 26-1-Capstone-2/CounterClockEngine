@@ -62,9 +62,9 @@ TIME_ALPHA      = 0.5    # 0=시간만, 1=거리만 (0.5: 균등 혼합)
 # ────────────────────────────────────────────────────────────────
 
 # sigmoid 전환 기준점(m/s)과 가파름(steepness)
-# stationary→walking: 0.5 m/s, walking→vehicle: 8.0 m/s
-_ACT_BOUNDARY  = (0.5,  8.0)
-_ACT_STEEPNESS = (10.0, 2.0)   # 클수록 경계가 선명, 작을수록 완만
+# stationary→walking: 0.5 m/s, walking→vehicle: 4.5 m/s (≈16 km/h 도시 주행)
+_ACT_BOUNDARY  = (0.5,  4.5)
+_ACT_STEEPNESS = (10.0, 3.0)   # 클수록 경계가 선명, 작을수록 완만
 _ACT_ANCHORS   = (3.0,  1.0, 0.3)  # stationary / walking / vehicle multiplier
 
 SLC_THRESHOLD_M = 500
@@ -140,7 +140,7 @@ def estimate_activity(history: list[LocationPoint]) -> ActivityType:
         return "unknown"
     if avg_speed < 0.5:
         return "stationary"
-    elif avg_speed < 8.0:
+    elif avg_speed < 4.5:
         return "walking"
     else:
         return "vehicle"

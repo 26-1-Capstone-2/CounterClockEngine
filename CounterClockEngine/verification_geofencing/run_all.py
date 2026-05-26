@@ -132,8 +132,8 @@ def run_interactive():
 
         # 상세 정보
         zones = ", ".join(result.entered_zones) if result.entered_zones else "없음"
-        print(f"       base={result.base_interval}초"
-              f"  × activity({result.activity_multiplier})"
+        print(f"       urgency={result.urgency}"
+              f"  × activity({result.activity_multiplier:.3f})"
               f"  × slc({result.slc_multiplier})"
               f"  → {result.next_interval}초"
               f"  | 진입존: {zones}")

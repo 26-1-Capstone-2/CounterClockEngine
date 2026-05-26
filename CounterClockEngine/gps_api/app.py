@@ -12,6 +12,8 @@ from .routes.group import bp as group_bp
 from .routes.latency import bp as latency_bp
 from .routes.journey import bp as journey_bp
 from .routes.webhook import bp as webhook_bp
+from .routes.personal import bp as personal_bp
+from .routes.alarm import bp as alarm_bp
 
 
 def create_app() -> Flask:
@@ -40,6 +42,8 @@ def create_app() -> Flask:
     app.register_blueprint(latency_bp,     url_prefix="/api/latency")
     app.register_blueprint(journey_bp,     url_prefix="/api/journey")
     app.register_blueprint(webhook_bp,     url_prefix="/webhook")
+    app.register_blueprint(personal_bp,    url_prefix="/api/personal")
+    app.register_blueprint(alarm_bp,       url_prefix="/internal/alarm")
 
     @app.get("/health")
     def health():
@@ -101,6 +105,12 @@ def create_app() -> Flask:
                 },
                 "webhook": [
                     "POST /webhook/db-sync  (type: appointment | participant | participants)",
+                ],
+                "personal": [
+                    "POST /api/personal/departure",
+                ],
+                "internal": [
+                    "POST /internal/alarm/appointment",
                 ],
             },
         })
