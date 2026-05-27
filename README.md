@@ -575,13 +575,13 @@ estimated_arrival    = departure_time + duration_sec       (= target_time)
 
 ### 엔드포인트 비교
 
-| 엔드포인트 | 용도 | `is_last_mode` |
+| 엔드포인트 | 용도 | `last_train_mode` |
 |-----------|------|----------------|
 | `POST /api/personal/departure` | 앱 → 스프링 → 플라스크 (귀가) | O |
 | `POST /internal/alarm/journey` | 스프링 내부 → 플라스크 (개인 여정) | O |
 | `POST /internal/alarm/appointment` | 스프링 내부 → 플라스크 (그룹 약속) | 없음 |
 
-### 계산 공식 (internal 엔드포인트)
+### 계산 공식 (일반 모드)
 
 ```
 latency_buffer       = recommended_buffer(member_id)   // 지각 패턴 기반, cold-start 시 10분
@@ -593,10 +593,50 @@ estimated_arrival    = departure_time + duration_sec
 
 `preparation_time`(사용자 준비 시간)과 `latency_buffer`(지각 패턴 보정)를 **분리해서 합산**합니다. 지각 기록이 쌓일수록 `latency_buffer`가 개인화됩니다.
 
+---
+
+### 막차 모드 (`last_train_mode: "yes"`)
+
+`transport_type`이 `TRANSIT`일 때만 사용할 수 있습니다. 해당 날짜의 마지막 대중교통 출발 시각을 자동으로 탐색해, 막차를 놓치지 않도록 알람 시각을 계산합니다.
+
+#### 막차 탐색 원리
+
+ODsay API의 `SearchDate` + `SearchTime` 파라미터를 이용해 **당일 23:00 ~ 익일 01:00** 구간을 이진 탐색합니다. 약 8~10회의 API 호출로 1분 단위 정밀도로 마지막 유효 출발 시각을 찾습니다.
+
+```
+23:00 ─────────────────────── 익일 01:00
+        이진 탐색 (8~10회)
+          └─ 마지막 유효 출발 시각 확정
+```
+
+자정을 넘기는 시각(00:00~01:00)은 익일 날짜로 자동 처리되어 ODsay에 올바른 `SearchDate`가 전달됩니다.
+
+#### 알람 시각 결정 규칙
+
+막차 출발 시각과 `target_time` 기준 출발 시각 중 **더 이른 것**을 기준으로 알람을 설정합니다.
+
+| 상황 | 기준 출발 시각 | 이유 |
+|------|--------------|------|
+| 막차 출발 ≤ target_time 기준 출발 | 막차 출발 시각 | 막차를 타지 않으면 귀가 불가 |
+| 막차 출발 > target_time 기준 출발 | target_time 기준 출발 시각 | 목표 시간이 더 촉박함 |
+
+```
+departure_alarm_time = min(last_train_departure, normal_departure) − total_buffer
+```
+
+#### 에러 케이스
+
+| 조건 | 응답 |
+|------|------|
+| `transport_type: "DRIVING"`인데 `last_train_mode: "yes"` | `400` — 막차는 TRANSIT 전용 |
+| 이미 막차가 지난 경우 | `404` — 유효한 막차 경로 없음 |
+
+---
+
 ### Request / Response
 
 ```json
-// Request (journey — is_last_mode 포함)
+// Request (일반 모드)
 {
   "current_lat": 37.49796,
   "current_lng": 127.02759,
@@ -604,18 +644,36 @@ estimated_arrival    = departure_time + duration_sec
   "dest_lng": 127.05678,
   "transport_type": "TRANSIT",
   "target_time": "2026-05-25T18:00:00",
-  "is_last_mode": false,
   "preparation_time": 10,
   "member_id": "user_001"    // optional — 지각 패턴 개인화
 }
 
-// Request (appointment — is_last_mode 없음, 나머지 동일)
-
-// Response (journey / appointment 공통)
+// Response (일반 모드)
 {
   "departure_alarm_time": "2026-05-25T17:20:00",
   "estimated_arrival": "2026-05-25T18:00:00",
-  "latency_buffer_min": 5.2   // 실제 적용된 지각 패턴 버퍼 (분)
+  "latency_buffer_min": 5.2
+}
+
+// Request (막차 모드)
+{
+  "current_lat": 37.49796,
+  "current_lng": 127.02759,
+  "dest_lat": 37.51234,
+  "dest_lng": 127.05678,
+  "transport_type": "TRANSIT",
+  "last_train_mode": "yes",
+  "target_time": "2026-05-25T23:00:00",  // 날짜 기준으로 활용
+  "preparation_time": 10,
+  "member_id": "user_001"    // optional
+}
+
+// Response (막차 모드 — last_train_departure 필드 추가)
+{
+  "departure_alarm_time": "2026-05-25T22:15:00",
+  "estimated_arrival":    "2026-05-25T23:47:00",
+  "latency_buffer_min":   10.0,
+  "last_train_departure": "2026-05-25T22:25:00"  // 탐색된 막차 출발 시각 (참고용)
 }
 ```
 

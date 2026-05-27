@@ -7,6 +7,7 @@ ODSAY 대중교통 길찾기 API 연동
 
 import requests
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 ODSAY_BASE_URL = "https://api.odsay.com/v1/api"
 
@@ -29,9 +30,13 @@ def fetch_transit_route(
     dest_lat: float,
     dest_lon: float,
     api_key: str,
+    search_dt: datetime | None = None,
 ) -> tuple[list[tuple[float, float]], int, int, list[TransitLeg]]:
     """
     ODSAY 대중교통 경로 조회.
+
+    Args:
+        search_dt: 출발 시각 기준 조회 (None이면 현재 시각 기준)
 
     Returns:
         coords      : [(lat, lon), ...] 전체 경로 좌표
@@ -49,6 +54,9 @@ def fetch_transit_route(
         "SearchType": 0,   # 0=지하철+버스
         "lang": 0,
     }
+    if search_dt is not None:
+        params["SearchDate"] = search_dt.strftime("%Y%m%d")
+        params["SearchTime"] = search_dt.strftime("%H%M")
     resp = requests.get(
         f"{ODSAY_BASE_URL}/searchPubTransPathT",
         params=params, timeout=10,
@@ -120,6 +128,54 @@ def fetch_transit_route(
         raise ValueError("ODSAY 경로 좌표를 추출할 수 없습니다.")
 
     return all_coords, int(duration_sec), int(total_dist), legs
+
+
+def find_last_train_departure(
+    origin_lat: float,
+    origin_lon: float,
+    dest_lat: float,
+    dest_lon: float,
+    api_key: str,
+    base_dt: datetime,
+) -> tuple[datetime, int] | None:
+    """
+    이진 탐색으로 유효한 마지막 대중교통 출발 시각을 찾는다.
+
+    탐색 범위: 당일 23:00 ~ 익일 01:00 (자정 넘김 자동 처리)
+
+    Returns:
+        (last_departure_dt, duration_sec) 또는 None (막차 없음)
+    """
+    base_date = base_dt.date()
+    lo = datetime(base_date.year, base_date.month, base_date.day, 23, 0)
+    hi = lo + timedelta(hours=2)  # 익일 01:00
+
+    # hi에서 유효한 경로가 없으면 탐색 범위 내 막차가 없는 것
+    try:
+        fetch_transit_route(origin_lat, origin_lon, dest_lat, dest_lon, api_key, hi)
+    except ValueError:
+        # hi가 막히면 lo부터 시작해 유효 여부 확인 후 탐색
+        try:
+            fetch_transit_route(origin_lat, origin_lon, dest_lat, dest_lon, api_key, lo)
+        except ValueError:
+            return None
+
+    last_valid_dt: datetime | None = None
+    last_valid_duration: int = 0
+
+    while (hi - lo).total_seconds() > 60:  # 1분 단위 정밀도
+        mid = lo + (hi - lo) / 2
+        try:
+            _, duration_sec, _, _ = fetch_transit_route(
+                origin_lat, origin_lon, dest_lat, dest_lon, api_key, mid
+            )
+            last_valid_dt = mid
+            last_valid_duration = duration_sec
+            lo = mid + timedelta(minutes=1)
+        except ValueError:
+            hi = mid - timedelta(minutes=1)
+
+    return (last_valid_dt, last_valid_duration) if last_valid_dt else None
 
 
 def resample_transit_route(
