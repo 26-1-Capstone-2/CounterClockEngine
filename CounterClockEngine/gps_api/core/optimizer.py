@@ -45,6 +45,20 @@ class OptimizationResult:
     urgency: float      # 최종 긴급도 [0=여유, 1=매우 긴박]
 
 
+def decayed_eta(eta_sec: Optional[float], last_updated: Optional[str]) -> Optional[float]:
+    """
+    마지막 계산된 ETA에서 경과 시간을 차감한 근사 ETA(초) 반환.
+    GPS 없이도 시간 흐름만큼 ETA를 줄여 staleness 보정.
+    """
+    if eta_sec is None or last_updated is None:
+        return eta_sec
+    try:
+        elapsed = (datetime.now() - datetime.fromisoformat(last_updated)).total_seconds()
+        return max(0.0, eta_sec - elapsed)
+    except (ValueError, TypeError):
+        return eta_sec
+
+
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6_371_000
     phi1, phi2 = math.radians(lat1), math.radians(lat2)

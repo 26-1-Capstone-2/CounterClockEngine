@@ -21,7 +21,7 @@ from gps_api.core import cache as _cache
 from gps_api.core.db_client import DBClient
 from gps_api.core.kakao_route import fetch_route
 from gps_api.core.latency import recommended_buffer
-from gps_api.core.optimizer import haversine
+from gps_api.core.optimizer import haversine, decayed_eta
 
 DEFAULT_SPEED_MPS = 1.4
 ARRIVAL_RADIUS_M = 100.0
@@ -251,6 +251,11 @@ def _from_db(raw: dict) -> Journey:
 # ------------------------------------------------------------------
 
 def to_dict(j: Journey) -> dict:
+    current_eta = decayed_eta(j.eta_sec, j.last_updated)
+    current_status = (
+        _compute_status(current_eta, j.distance_m or 0.0, j.goal_time)
+        if current_eta is not None else j.status
+    )
     return {
         "journey_id": j.journey_id,
         "member_id": j.member_id,
@@ -271,10 +276,10 @@ def to_dict(j: Journey) -> dict:
         "planned_date": j.planned_date,
         "alarm_enabled": j.alarm_enabled,
         "has_location": j.current_lat is not None,
-        "eta_sec": j.eta_sec,
-        "eta_min": round(j.eta_sec / 60, 1) if j.eta_sec is not None else None,
+        "eta_sec": current_eta,
+        "eta_min": round(current_eta / 60, 1) if current_eta is not None else None,
         "distance_m": j.distance_m,
         "alarm_time": j.alarm_time,
-        "status": j.status,
+        "status": current_status,
         "last_updated": j.last_updated,
     }

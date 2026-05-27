@@ -1,6 +1,6 @@
 # CounterClock — GPS 엔진 기술 문서
 
-CounterClock은 그룹 약속 상황에서 각 참가자의 실시간 위치를 추적하고, 배터리 효율을 극대화하는 Adaptive GPS 갱신 주기와 WebSocket 기반 실시간 ETA 브로드캐스트를 제공하는 백엔드 엔진입니다.
+CounterClock은 그룹 약속 및 개인 여정(귀가) 상황에서 각 참가자의 실시간 위치를 추적하고, 배터리 효율을 극대화하는 Adaptive GPS 갱신 주기와 WebSocket 기반 실시간 ETA 브로드캐스트를 제공하는 백엔드 엔진입니다.
 
 ---
 
@@ -8,11 +8,13 @@ CounterClock은 그룹 약속 상황에서 각 참가자의 실시간 위치를 
 
 1. [GPS 갱신 주기 최적화 (Cosine Blend Interval)](#1-gps-갱신-주기-최적화-cosine-blend-interval)
 2. [ETA 계산 원리](#2-eta-계산-원리)
-3. [비동기 처리](#3-비동기-처리)
-4. [전체 데이터 흐름](#4-전체-데이터-흐름)
-5. [DB 서버 연동 (Webhook + 캐시)](#5-db-서버-연동-webhook--캐시)
-6. [GPS 트리거 — 서버 주도 갱신 주기](#6-gps-트리거--서버-주도-갱신-주기)
-7. [API 엔드포인트](#7-api-엔드포인트)
+3. [ETA 시간 차감 근사 (Time-Decay)](#3-eta-시간-차감-근사-time-decay)
+4. [비동기 처리](#4-비동기-처리)
+5. [전체 데이터 흐름](#5-전체-데이터-흐름)
+6. [DB 서버 연동 (Webhook + 캐시)](#6-db-서버-연동-webhook--캐시)
+7. [GPS 트리거 — 서버 주도 갱신 주기](#7-gps-트리거--서버-주도-갱신-주기)
+8. [출발 알람 API (스프링 연동)](#8-출발-알람-api-스프링-연동)
+9. [API 엔드포인트](#9-api-엔드포인트)
 
 ---
 
@@ -215,6 +217,40 @@ threshold = max(20m, 남은거리 × 5% + |속도| × 1.5)
 
 ---
 
+### 지각 기록 자동 누적
+
+외부 DB는 지각 패턴 데이터를 제공하지 않으므로, **도착 처리(`POST /api/group/<id>/arrive`) 시점에 Flask가 직접 기록을 저장**합니다.
+
+```
+POST /api/group/<id>/arrive
+    ↓
+mark_arrived() 실행
+    ├─ scheduled_time  = 약속 시간
+    └─ actual_arrival  = 현재 시각
+         ↓
+    lateness = actual_arrival − scheduled_time
+    (양수 = 지각, 음수 = 일찍 도착)
+         ↓
+    data/latency_{member_id}.json 에 누적 (최대 50건 유지)
+```
+
+약속을 사용할수록 버퍼가 점점 개인화됩니다.
+
+| 누적 기록 수 | 버퍼 계산 방식 |
+|------------|--------------|
+| 0건        | 기본값 10분 사용 |
+| 1건        | 해당 지각값과 10분 중 큰 값 |
+| 2건 이상    | 평균 + 0.84 × 표준편차 (신뢰도 80%) |
+
+버퍼 우선순위:
+
+```
+1순위: DB 멤버 설정의 buffer_minutes (사용자가 앱에서 직접 지정한 경우)
+2순위: 자동 누적된 지각 기록 기반 통계값
+```
+
+---
+
 ### 참가자 상태 분류
 
 | 상태        | 조건                                        |
@@ -227,7 +263,46 @@ threshold = max(20m, 남은거리 × 5% + |속도| × 1.5)
 
 ---
 
-## 3. 비동기 처리
+## 3. ETA 시간 차감 근사 (Time-Decay)
+
+### 배경 — 기존 구조의 한계
+
+기존에는 앱이 GPS를 전송할 때만 ETA를 재계산했습니다. 앱이 백그라운드 상태이거나 GPS를 보내지 않으면 서버가 보유한 ETA는 마지막 계산 시점에 고정된 채로 오래됩니다.
+
+```
+17:00  앱이 GPS 전송 → ETA = 30분 계산
+17:10  앱 백그라운드 전환, GPS 전송 없음
+17:10  GET /api/group/{id} 조회 → 여전히 ETA = 30분 (10분 전 값)  ← 문제
+```
+
+### 해결 — 읽을 때 경과 시간 차감
+
+GPS가 새로 오지 않아도 **응답을 직렬화하는 시점에** 마지막 계산된 ETA에서 경과 시간을 빼 현재 근사값을 반환합니다.
+
+```
+decayed_eta = max(0, last_eta_sec − (now − last_updated).total_seconds())
+```
+
+```
+17:00  앱이 GPS 전송 → eta_sec = 1800 (30분), last_updated = "17:00:00"
+17:10  GET /api/group/{id} 조회
+       decayed_eta = 1800 − 600 = 1200 (20분)  ← API 호출 없이 근사
+       status = _compute_status(1200, ...)       ← 현재 시각 기준 재판정
+```
+
+### 설계 원칙
+
+- **저장된 값은 변경하지 않습니다.** `eta_sec`와 `last_updated` 필드는 마지막 실제 계산값 그대로 유지됩니다.
+- **읽을 때만 적용됩니다.** `get_group_summary()` 및 `to_dict()` 직렬화 시점에만 decay를 계산합니다.
+- **다음 GPS가 오면 정확한 값으로 덮어씁니다.** 실제 계산 결과가 항상 우선합니다.
+
+### 한계
+
+교통 상황 변화(정체, 사고)나 경로 이탈은 반영하지 못합니다. 이 방식은 **"GPS 없이도 ETA가 0으로 굳는 것을 방지"** 하는 1단계 보정이며, 정밀한 재계산은 앱이 GPS를 전송할 때 수행됩니다.
+
+---
+
+## 4. 비동기 처리
 
 ### 문제 상황
 
@@ -300,7 +375,7 @@ socketio.init_app(app, cors_allowed_origins="*", async_mode="threading")
 
 ---
 
-## 4. 전체 데이터 흐름
+## 5. 전체 데이터 흐름
 
 ```
 [DB 서버]
@@ -341,7 +416,7 @@ socketio.init_app(app, cors_allowed_origins="*", async_mode="threading")
 
 ---
 
-## 5. DB 서버 연동 (Webhook + 캐시)
+## 6. DB 서버 연동 (Webhook + 캐시)
 
 ### 배경
 
@@ -417,7 +492,7 @@ GPS 처리
 
 ---
 
-## 6. GPS 트리거 — 서버 주도 갱신 주기
+## 7. GPS 트리거 — 서버 주도 갱신 주기
 
 ### 기존 방식의 한계
 
@@ -479,18 +554,111 @@ socket.on("request_gps", ({ group_id, next_interval_sec, gps_mode }) => {
 
 ---
 
-## 7. API 엔드포인트
+## 8. 출발 알람 API (스프링 연동)
+
+스프링 서버가 목표 도착 시간과 현재 위치를 전달하면, 플라스크가 경로 API로 소요 시간을 계산해 **출발 알람 시각**과 **예상 도착 시각**을 반환합니다.
+
+### 계산 공식
+
+```
+departure_time       = target_time − duration_sec          (이 시각에 출발해야 도착)
+departure_alarm_time = departure_time − preparation_time   (알람은 준비 시간만큼 앞당김)
+estimated_arrival    = departure_time + duration_sec       (= target_time)
+```
+
+### transport_type별 경로 API
+
+| transport_type | 사용 API | 환경 변수 |
+|---------------|----------|-----------|
+| `DRIVING`     | 카카오 모빌리티 | `KAKAO_API_KEY` |
+| `TRANSIT`     | ODsay 대중교통  | `ODSAY_API_KEY` |
+
+### 엔드포인트 비교
+
+| 엔드포인트 | 용도 | `is_last_mode` |
+|-----------|------|----------------|
+| `POST /api/personal/departure` | 앱 → 스프링 → 플라스크 (귀가) | O |
+| `POST /internal/alarm/journey` | 스프링 내부 → 플라스크 (개인 여정) | O |
+| `POST /internal/alarm/appointment` | 스프링 내부 → 플라스크 (그룹 약속) | 없음 |
+
+### 계산 공식 (internal 엔드포인트)
+
+```
+latency_buffer       = recommended_buffer(member_id)   // 지각 패턴 기반, cold-start 시 10분
+total_buffer         = preparation_time + latency_buffer
+departure_time       = target_time - duration_sec
+departure_alarm_time = departure_time - total_buffer
+estimated_arrival    = departure_time + duration_sec
+```
+
+`preparation_time`(사용자 준비 시간)과 `latency_buffer`(지각 패턴 보정)를 **분리해서 합산**합니다. 지각 기록이 쌓일수록 `latency_buffer`가 개인화됩니다.
+
+### Request / Response
+
+```json
+// Request (journey — is_last_mode 포함)
+{
+  "current_lat": 37.49796,
+  "current_lng": 127.02759,
+  "dest_lat": 37.51234,
+  "dest_lng": 127.05678,
+  "transport_type": "TRANSIT",
+  "target_time": "2026-05-25T18:00:00",
+  "is_last_mode": false,
+  "preparation_time": 10,
+  "member_id": "user_001"    // optional — 지각 패턴 개인화
+}
+
+// Request (appointment — is_last_mode 없음, 나머지 동일)
+
+// Response (journey / appointment 공통)
+{
+  "departure_alarm_time": "2026-05-25T17:20:00",
+  "estimated_arrival": "2026-05-25T18:00:00",
+  "latency_buffer_min": 5.2   // 실제 적용된 지각 패턴 버퍼 (분)
+}
+```
+
+`member_id` 미전달 시 `latency_buffer_min` = 10.0 (cold-start 기본값).
+
+---
+
+## 9. API 엔드포인트
 
 ### REST API
+
+**그룹 약속**
 
 | 메서드   | 경로                           | 설명                                |
 |---------|-------------------------------|-------------------------------------|
 | `POST`  | `/api/group/create`            | 그룹(약속) 생성                      |
 | `POST`  | `/api/group/<id>/join`         | 그룹 참가                            |
 | `POST`  | `/api/group/<id>/location`     | 위치 업데이트 + 전체 ETA 재계산      |
-| `GET`   | `/api/group/<id>`              | 그룹 현황 조회                       |
+| `GET`   | `/api/group/<id>`              | 그룹 현황 조회 (Time-Decay ETA 반영) |
 | `POST`  | `/api/group/<id>/arrive`       | 도착 처리                            |
 | `DELETE`| `/api/group/<id>/leave`        | 그룹 탈퇴                            |
+
+**개인 여정**
+
+| 메서드   | 경로                              | 설명                                     |
+|---------|----------------------------------|------------------------------------------|
+| `GET`   | `/api/journey/<id>`              | 여정 조회 (Time-Decay ETA 반영)           |
+| `GET`   | `/api/journey/member/<id>`       | 멤버의 여정 목록 조회                     |
+| `POST`  | `/api/journey/<id>/location`     | 위치 업데이트 + ETA 재계산                |
+| `POST`  | `/api/journey/eta`               | 임시 ETA 계산 (DB 저장 없음)              |
+
+**출발 알람 (스프링 연동)**
+
+| 메서드   | 경로                              | 설명                                     |
+|---------|----------------------------------|------------------------------------------|
+| `POST`  | `/api/personal/departure`        | 귀가 출발 알람 계산 (is_last_mode 포함)   |
+| `POST`  | `/internal/alarm/journey`        | 개인 여정 출발 알람 (스프링 내부 호출)    |
+| `POST`  | `/internal/alarm/appointment`    | 그룹 약속 출발 알람 (스프링 내부 호출)    |
+
+**기타**
+
+| 메서드   | 경로                           | 설명                                |
+|---------|-------------------------------|-------------------------------------|
 | `POST`  | `/api/optimizer/interval`      | GPS 갱신 주기 계산                   |
 | `POST`  | `/api/eta/calculate`           | 단일 ETA 계산                        |
 | `POST`  | `/api/latency/record`          | 지각 기록 저장                       |
@@ -532,8 +700,10 @@ gunicorn "gps_api.wsgi:app" --worker-class eventlet --workers 1 --bind 0.0.0.0:5
 
 ### 환경 변수
 
-| 변수명          | 설명                                  | 기본값  |
-|----------------|--------------------------------------|--------|
-| `DB_BASE_URL`  | 외부 DB 서버 URL (미설정 시 인메모리) | 없음   |
-| `PORT`         | 서버 포트                             | 5000   |
-| `DEBUG`        | 디버그 모드                           | False  |
+| 변수명            | 설명                                      | 기본값  |
+|-----------------|------------------------------------------|--------|
+| `KAKAO_API_KEY` | 카카오 모빌리티 REST API 키 (DRIVING 경로) | 없음   |
+| `ODSAY_API_KEY` | ODsay 대중교통 API 키 (TRANSIT 경로)      | 없음   |
+| `DB_BASE_URL`   | 외부 DB 서버 URL (미설정 시 인메모리)      | 없음   |
+| `PORT`          | 서버 포트                                 | 5000   |
+| `DEBUG`         | 디버그 모드                               | False  |

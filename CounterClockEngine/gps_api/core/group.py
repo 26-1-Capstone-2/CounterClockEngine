@@ -20,7 +20,7 @@ from gps_api.core import cache as _cache
 from gps_api.core.db_client import DBClient
 from gps_api.core.kakao_route import fetch_route
 from gps_api.core.latency import recommended_buffer
-from gps_api.core.optimizer import haversine, calculate_next_interval, LocationPoint
+from gps_api.core.optimizer import haversine, calculate_next_interval, LocationPoint, decayed_eta
 
 ARRIVAL_RADIUS_M = 100.0
 DEFAULT_SPEED_MPS = 1.4
@@ -255,12 +255,14 @@ def compute_gps_interval(
     if appointment_time is not None:
         appointment_remaining_sec = max((appointment_time - datetime.now()).total_seconds(), 0.0)
 
+    current_eta = decayed_eta(participant.eta_sec, participant.last_updated)
+
     result = calculate_next_interval(
         user_lat=participant.current_lat,
         user_lon=participant.current_lon,
         history=history,
         geofences=geofences,
-        eta_sec=participant.eta_sec,
+        eta_sec=current_eta,
         appointment_remaining_sec=appointment_remaining_sec,
     )
     return {
@@ -393,6 +395,7 @@ def mark_arrived(group_id: str, member_id: str) -> Optional[dict]:
         _db.update_participant(target.participant_id, status="arrived", eta=0)
         group = _appointment_to_group(raw_appt)
         group.participants = {p.member_id: p for p in participants}
+        _record_arrival(member_id, group_id, group.appointment_time, now_iso)
         return get_group_summary(group)
 
     group = _store.get(group_id)
@@ -400,7 +403,28 @@ def mark_arrived(group_id: str, member_id: str) -> Optional[dict]:
         return None
     p = group.participants[member_id]
     p.status, p.eta_sec, p.distance_m, p.last_updated = "arrived", 0.0, 0.0, now_iso
+    _record_arrival(member_id, group_id, group.appointment_time, now_iso)
     return get_group_summary(group)
+
+
+def _record_arrival(
+    member_id: str,
+    group_id: str,
+    appointment_time: datetime,
+    arrived_iso: str,
+) -> None:
+    """도착 처리 시 지각 기록을 자동으로 저장한다. 실패해도 도착 처리는 계속된다."""
+    from gps_api.core.latency import save_record, ArrivalRecord
+    try:
+        save_record(ArrivalRecord(
+            user_id=member_id,
+            event_id=group_id,
+            scheduled_time=appointment_time.isoformat(),
+            actual_arrival_time=arrived_iso,
+            location_id=group_id,
+        ))
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------
@@ -500,14 +524,16 @@ def get_group_summary(group: Group) -> dict:
                 "is_host": p.is_host,
                 "travel_mode": p.travel_mode,
                 "has_location": p.current_lat is not None,
-                "eta_sec": p.eta_sec,
-                "eta_min": round(p.eta_sec / 60, 1) if p.eta_sec is not None else None,
+                "eta_sec": current_eta,
+                "eta_min": round(current_eta / 60, 1) if current_eta is not None else None,
                 "distance_m": p.distance_m,
                 "alarm_time": p.alarm_time,
                 "alarm_enabled": p.alarm_enabled,
-                "status": p.status,
+                "status": _compute_status(current_eta, p.distance_m or 0.0, group.appointment_time)
+                          if current_eta is not None else p.status,
                 "last_updated": p.last_updated,
             }
             for p in group.participants.values()
+            for current_eta in [decayed_eta(p.eta_sec, p.last_updated)]
         ],
     }
