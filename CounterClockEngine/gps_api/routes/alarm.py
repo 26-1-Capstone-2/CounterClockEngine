@@ -44,19 +44,19 @@ def _compute_alarm(body: dict, require_is_last_mode: bool = False) -> dict:
     target_time      = _parse_datetime(body["target_time"])
     preparation_time = float(body.get("preparation_time", 0))
     member_id        = body.get("member_id")
-    last_train_mode  = str(body.get("last_train_mode", "no")).lower() == "yes"
+    is_last_mode = bool(body.get("is_last_mode", False))
 
     if transport_type not in ("DRIVING", "TRANSIT"):
         abort(400, description="transport_type must be DRIVING or TRANSIT.")
 
-    if last_train_mode and transport_type != "TRANSIT":
-        abort(400, description="last_train_mode는 transport_type이 TRANSIT일 때만 사용할 수 있습니다.")
+    if is_last_mode and transport_type != "TRANSIT":
+        abort(400, description="is_last_mode는 transport_type이 TRANSIT일 때만 사용할 수 있습니다.")
 
     # 지각 패턴 버퍼
     latency_buffer_min = recommended_buffer(member_id) if member_id else _DEFAULT_BUFFER_MIN
     total_buffer_min   = preparation_time + latency_buffer_min
 
-    if last_train_mode:
+    if is_last_mode:
         odsay_key = current_app.config.get("ODSAY_API_KEY", "")
         result = find_last_train_departure(
             current_lat, current_lng, dest_lat, dest_lng,

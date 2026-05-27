@@ -575,7 +575,7 @@ estimated_arrival    = departure_time + duration_sec       (= target_time)
 
 ### 엔드포인트 비교
 
-| 엔드포인트 | 용도 | `last_train_mode` |
+| 엔드포인트 | 용도 | `is_last_mode` |
 |-----------|------|----------------|
 | `POST /api/personal/departure` | 앱 → 스프링 → 플라스크 (귀가) | O |
 | `POST /internal/alarm/journey` | 스프링 내부 → 플라스크 (개인 여정) | O |
@@ -595,7 +595,7 @@ estimated_arrival    = departure_time + duration_sec
 
 ---
 
-### 막차 모드 (`last_train_mode: "yes"`)
+### 막차 모드 (`is_last_mode: "yes"`)
 
 `transport_type`이 `TRANSIT`일 때만 사용할 수 있습니다. 해당 날짜의 마지막 대중교통 출발 시각을 자동으로 탐색해, 막차를 놓치지 않도록 알람 시각을 계산합니다.
 
@@ -628,7 +628,7 @@ departure_alarm_time = min(last_train_departure, normal_departure) − total_buf
 
 | 조건 | 응답 |
 |------|------|
-| `transport_type: "DRIVING"`인데 `last_train_mode: "yes"` | `400` — 막차는 TRANSIT 전용 |
+| `transport_type: "DRIVING"`인데 `is_last_mode: "yes"` | `400` — 막차는 TRANSIT 전용 |
 | 이미 막차가 지난 경우 | `404` — 유효한 막차 경로 없음 |
 
 ---
@@ -662,7 +662,7 @@ departure_alarm_time = min(last_train_departure, normal_departure) − total_buf
   "dest_lat": 37.51234,
   "dest_lng": 127.05678,
   "transport_type": "TRANSIT",
-  "last_train_mode": "yes",
+  "is_last_mode": true,
   "target_time": "2026-05-25T23:00:00",  // 날짜 기준으로 활용
   "preparation_time": 10,
   "member_id": "user_001"    // optional
