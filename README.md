@@ -451,6 +451,15 @@ GPS 처리
 // 약속 전체 참가자 목록 교체 (초기 로딩)
 { "type": "participants", "appointment_id": "...", "data": [ {...}, {...} ] }
 
+// 멤버 설정 upsert (버퍼 등)
+{ "type": "member_settings", "data": { "member_id": "...", ... } }
+
+// 개인 여정 단건 upsert
+{ "type": "journey", "data": { "journey_id": "...", ... } }
+
+// 멤버 전체 여정 목록 교체
+{ "type": "member_journeys", "member_id": "...", "data": [ {...}, {...} ] }
+
 // 지오펜스 이탈 (출발지 500m 초과 이동 감지)
 {
   "type": "geofence_exit",
@@ -475,12 +484,12 @@ GPS 처리
               └─▶ [GPS 서버] POST /webhook/db-sync { type: "geofence_exit", ... }
                         │
                         ├─ 전체 그룹 ETA 재계산
-                        ├─ socketio.emit("group_update", room=appointment_id)
-                        │    → 그룹 전체에 "이 참가자 출발!" 알림
-                        │
-                        └─ socketio.emit("request_gps", { next_interval_sec: 10 }, ...)
-                             → 이탈 참가자에게 BALANCED(10초) 주기로 즉시 전환
-                             → 나머지 참가자는 각자 Adaptive Interval 유지
+                        │   (이탈 참가자 GPS 주기 → BALANCED 10초 강제 설정)
+                        └─ { summary, gps_intervals } 반환
+                                    │
+                                    Spring이 수신하여 WebSocket/FCM으로 Push:
+                                    ├─ summary       → group_update 브로드캐스트 (그룹 전체)
+                                    └─ gps_intervals → request_gps 각 멤버에게 개별 Push
 ```
 
 **2단계 추적 전환 요약**
@@ -738,7 +747,7 @@ departure_alarm_time = min(last_train_departure, normal_departure) − total_buf
 
 | 메서드  | 경로                  | 설명                                                                         |
 |--------|-----------------------|------------------------------------------------------------------------------|
-| `POST` | `/webhook/db-sync`    | DB 서버 Push 수신 (`appointment` / `participant` / `participants` / `geofence_exit`) |
+| `POST` | `/webhook/db-sync`    | DB 서버 Push 수신 (`appointment` / `participant` / `participants` / `member_settings` / `journey` / `member_journeys` / `geofence_exit`) |
 
 ---
 

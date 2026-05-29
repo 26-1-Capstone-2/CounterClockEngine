@@ -451,6 +451,15 @@ GPS processing
 // Replace entire participant list for appointment (initial loading)
 { "type": "participants", "appointment_id": "...", "data": [ {...}, {...} ] }
 
+// Member settings upsert (buffer, etc.)
+{ "type": "member_settings", "data": { "member_id": "...", ... } }
+
+// Single personal journey upsert
+{ "type": "journey", "data": { "journey_id": "...", ... } }
+
+// Replace all journeys for a member
+{ "type": "member_journeys", "member_id": "...", "data": [ {...}, {...} ] }
+
 // Geofence exit (departure point 500m+ movement detected)
 {
   "type": "geofence_exit",
@@ -475,12 +484,12 @@ When the frontend sends GPS, the DB server also receives the location. If a part
               └─▶ [GPS Server] POST /webhook/db-sync { type: "geofence_exit", ... }
                         │
                         ├─ Full group ETA recalculation
-                        ├─ socketio.emit("group_update", room=appointment_id)
-                        │    → "This participant has departed!" notification to whole group
-                        │
-                        └─ socketio.emit("request_gps", { next_interval_sec: 10 }, ...)
-                             → Immediately switch departed participant to BALANCED (10s) interval
-                             → Remaining participants maintain their respective Adaptive Intervals
+                        │   (exiting participant's GPS interval forced to BALANCED 10s)
+                        └─ Returns { summary, gps_intervals }
+                                    │
+                                    Spring receives and pushes via WebSocket/FCM:
+                                    ├─ summary       → group_update broadcast (entire group)
+                                    └─ gps_intervals → request_gps push to each individual member
 ```
 
 **Two-Phase Tracking Transition Summary**
@@ -738,7 +747,7 @@ departure_alarm_time = min(last_train_departure, normal_departure) − total_buf
 
 | Method  | Path                  | Description                                                                           |
 |--------|-----------------------|---------------------------------------------------------------------------------------|
-| `POST` | `/webhook/db-sync`    | Receive DB server push (`appointment` / `participant` / `participants` / `geofence_exit`) |
+| `POST` | `/webhook/db-sync`    | Receive DB server push (`appointment` / `participant` / `participants` / `member_settings` / `journey` / `member_journeys` / `geofence_exit`) |
 
 ---
 
