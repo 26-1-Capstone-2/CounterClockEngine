@@ -1,10 +1,10 @@
 """
 WSGI/ASGI entry point.
 
-개발 서버 (SocketIO 내장):
+Development server (SocketIO built-in):
   python -m gps_api.wsgi
 
-프로덕션 (eventlet worker):
+Production (eventlet worker):
   gunicorn "gps_api.wsgi:app" --worker-class eventlet --workers 1 --bind 0.0.0.0:5000
 """
 
@@ -13,8 +13,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# .env를 반드시 app 모듈 import 전에 로드해야
-# Config 클래스의 os.getenv()가 올바른 값을 읽는다.
+# .env must be loaded before importing the app module so that
+# Config class's os.getenv() reads the correct values.
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 

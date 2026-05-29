@@ -1,9 +1,9 @@
 """
-지각 패턴 학습 API
+Lateness Pattern Learning API
 
-POST /api/latency/record   — 실제 도착 시간 기록 (지각 데이터 누적)
-GET  /api/latency/buffer   — 사용자별 personalized 출발 버퍼(분) 조회
-GET  /api/latency/history  — 사용자의 지각 기록 목록 조회
+POST /api/latency/record   — Record actual arrival time (accumulate lateness data)
+GET  /api/latency/buffer   — Retrieve personalized departure buffer (minutes) per user
+GET  /api/latency/history  — Retrieve a user's lateness record history
 """
 
 from uuid import uuid4
@@ -18,8 +18,8 @@ bp = Blueprint("latency", __name__)
 @bp.post("/record")
 def record():
     """
-    실제 도착 시간을 기록합니다.
-    누적된 기록이 많을수록 buffer 예측 정확도가 높아집니다.
+    Records the actual arrival time.
+    The more records accumulated, the more accurate the buffer prediction becomes.
 
     Request JSON:
       {
@@ -61,12 +61,12 @@ def record():
 @bp.get("/buffer")
 def buffer():
     """
-    과거 지각 패턴을 분석해 권장 출발 버퍼(분)를 반환합니다.
-    기록이 없으면 기본값 10분을 반환합니다.
+    Analyzes past lateness patterns and returns the recommended departure buffer (minutes).
+    Returns the default value of 10 minutes if no records exist.
 
     Query params:
-      user_id    : 사용자 ID (필수)
-      confidence : 신뢰 수준 0.70~0.99 (기본값: 0.80)
+      user_id    : user ID (required)
+      confidence : confidence level 0.70~0.99 (default: 0.80)
 
     Response JSON:
       {
@@ -99,10 +99,10 @@ def buffer():
 @bp.get("/history")
 def history():
     """
-    사용자의 지각 기록 목록을 반환합니다.
+    Returns the lateness record history for a user.
 
     Query params:
-      user_id : 사용자 ID (필수)
+      user_id : user ID (required)
     """
     user_id = request.args.get("user_id")
     if not user_id:

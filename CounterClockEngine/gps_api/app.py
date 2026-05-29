@@ -2,7 +2,6 @@ from flask import Flask, jsonify
 from dotenv import load_dotenv, find_dotenv
 
 from .config import Config
-from .extensions import socketio
 from .routes.optimizer import bp as optimizer_bp
 from .routes.simulation import bp as simulation_bp
 from .routes.kakao import bp as kakao_bp
@@ -22,9 +21,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    socketio.init_app(app, cors_allowed_origins="*", async_mode="threading")
-
-    # 외부 DB 서버 연결 (DB_BASE_URL 설정 시 활성화)
+    # Connect to external DB server (activated when DB_BASE_URL is configured)
     if app.config.get("DB_BASE_URL"):
         from .core.db_client import DBClient
         from .core import group as group_core
@@ -95,14 +92,6 @@ def create_app() -> Flask:
                     "POST /api/journey/<journey_id>/location",
                     "POST /api/journey/eta",
                 ],
-                "websocket": {
-                    "join_group":    "emit('join_group', {group_id}) → 그룹 room 입장",
-                    "group_update":  "on('group_update', callback) → 그룹 ETA 현황 수신",
-                    "join_member":   "emit('join_member', {member_id}) → 개인 room 입장",
-                    "request_gps":   "on('request_gps', callback) → GPS 전송 트리거 수신 (next_interval_sec, gps_mode)",
-                    "join_journey":  "emit('join_journey', {journey_id}) → 여정 room 입장",
-                    "journey_update": "on('journey_update', callback) → 개인 ETA 수신",
-                },
                 "webhook": [
                     "POST /webhook/db-sync  (type: appointment | participant | participants)",
                 ],

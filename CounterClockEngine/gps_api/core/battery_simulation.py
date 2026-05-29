@@ -1,7 +1,7 @@
 """
-GPS 시뮬레이션 + 배터리 절약률 측정
-- 실제 이동 경로를 재현하여 일반 모드 vs 최적화 모드 비교
-- 시나리오: 강남역 → 삼성역 버스 이동 후 삼성역 근처 정지
+GPS simulation + battery savings measurement
+- Reproduces actual travel routes to compare normal mode vs optimized mode
+- Scenario: Gangnam Station → Samsung Station bus trip, then stationary near Samsung Station
 """
 
 import math

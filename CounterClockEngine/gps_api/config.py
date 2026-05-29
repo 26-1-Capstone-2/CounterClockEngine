@@ -8,5 +8,5 @@ class Config:
     ODSAY_API_KEY = os.getenv("ODSAY_API_KEY", "")
     MAX_HISTORY_SIZE = 5
     DEFAULT_STEP_SEC = 10
-    # 외부 DB 서버 URL. 설정되지 않으면 인메모리 fallback으로 동작
+    # External DB server URL. Falls back to in-memory if not set.
     DB_BASE_URL = os.getenv("DB_BASE_URL", "")

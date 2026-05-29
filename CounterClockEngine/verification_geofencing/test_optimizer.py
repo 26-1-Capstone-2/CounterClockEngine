@@ -1,9 +1,9 @@
 """
-단위 테스트: next_interval 계산 로직 정확성 검증
-- Cosine Blend Interval (거리 + 시간 긴급도)
+Unit tests: next_interval calculation logic accuracy verification
+- Cosine Blend Interval (distance + time urgency)
 - Activity Recognition
 - Significant Location Change
-- 통합 계산 (계산 예시 시나리오 포함)
+- Integration calculation (including example calculation scenarios)
 """
 
 import sys
@@ -21,7 +21,7 @@ from optimizer import (
 )
 
 
-# ── 헬퍼: 위치 이력 생성 ──────────────────────────────────────
+# ── Helper: generate location history ────────────────────────
 def make_history(points: list[tuple], interval_sec: int = 10) -> list[LocationPoint]:
     base_time = datetime(2026, 5, 11, 9, 0, 0)
     return [
@@ -42,7 +42,7 @@ SAMSUNG_FENCE = Geofence(
 
 
 # ══════════════════════════════════════════════════════════════
-# 1. Haversine 거리 계산
+# 1. Haversine distance calculation
 # ══════════════════════════════════════════════════════════════
 class TestHaversine(unittest.TestCase):
 
@@ -73,7 +73,7 @@ class TestHaversine(unittest.TestCase):
 class TestCosineBlend(unittest.TestCase):
 
     def test_urgency_zero_gives_max_interval(self):
-        """긴급도=0 (아주 멀리, 시간 충분) → INTERVAL_MAX_S"""
+        """urgency=0 (very far, plenty of time) → INTERVAL_MAX_S"""
         raw, u_dist, u_time, urgency = _cosine_blend_interval(
             distance_to_fence=D_MAX_M,
             eta_sec=10.0,
@@ -83,7 +83,7 @@ class TestCosineBlend(unittest.TestCase):
         self.assertAlmostEqual(raw, INTERVAL_MAX_S, delta=5)
 
     def test_urgency_one_gives_min_interval(self):
-        """긴급도=1 (바로 앞, ETA=남은시간) → INTERVAL_MIN_S"""
+        """urgency=1 (right in front, ETA=remaining time) → INTERVAL_MIN_S"""
         raw, u_dist, u_time, urgency = _cosine_blend_interval(
             distance_to_fence=0.0,
             eta_sec=60.0,
@@ -93,11 +93,11 @@ class TestCosineBlend(unittest.TestCase):
         self.assertAlmostEqual(raw, INTERVAL_MIN_S, delta=1)
 
     def test_urgency_in_valid_range(self):
-        """긴급도는 항상 [0, 1] 범위"""
+        """urgency is always in [0, 1] range"""
         cases = [
             (0.0, 0.0, 0.0),
             (500.0, 300.0, 600.0),
-            (D_MAX_M * 2, 10.0, 3600.0),   # 거리 초과
+            (D_MAX_M * 2, 10.0, 3600.0),   # distance exceeds max
             (100.0, 9999.0, 60.0),          # eta > appointment
         ]
         for d, eta, appt in cases:
@@ -106,7 +106,7 @@ class TestCosineBlend(unittest.TestCase):
             self.assertLessEqual(urgency, 1.0, msg=f"case {d},{eta},{appt}")
 
     def test_interval_monotone_with_distance(self):
-        """거리가 멀어질수록 interval이 길어짐"""
+        """interval increases as distance grows"""
         distances = [50, 200, 500, 1000, 2000]
         intervals = [_cosine_blend_interval(d, None, None)[0] for d in distances]
         for i in range(len(intervals) - 1):
@@ -114,22 +114,22 @@ class TestCosineBlend(unittest.TestCase):
                 msg=f"interval should increase: d={distances[i]}→{distances[i+1]}")
 
     def test_time_urgency_without_info_mirrors_distance(self):
-        """시간 정보 없으면 u_time == u_dist"""
+        """u_time == u_dist when no time info available"""
         _, u_dist, u_time, _ = _cosine_blend_interval(800.0, None, None)
         self.assertAlmostEqual(u_dist, u_time, places=6)
 
     def test_time_urgency_high_eta_ratio(self):
-        """eta가 약속 시간 전체와 같으면 u_time=1 (매우 촉박)"""
+        """u_time=1 when eta equals full appointment time (very tight)"""
         _, _, u_time, _ = _cosine_blend_interval(1000.0, 600.0, 600.0)
         self.assertAlmostEqual(u_time, 1.0, places=3)
 
     def test_time_urgency_low_eta_ratio(self):
-        """eta가 약속 시간의 10%면 u_time이 낮음 (여유 있음)"""
+        """u_time is low when eta is 10% of appointment time (plenty of time)"""
         _, _, u_time, _ = _cosine_blend_interval(1000.0, 60.0, 600.0)
         self.assertAlmostEqual(u_time, 0.1, places=3)
 
     def test_alpha_weight_balance(self):
-        """alpha=1.0 이면 urgency == u_dist"""
+        """urgency == u_dist when alpha=1.0"""
         _, u_dist, _, _ = _cosine_blend_interval(500.0, None, None, alpha=1.0)
         _, _, _, urgency = _cosine_blend_interval(500.0, None, None, alpha=1.0)
         self.assertAlmostEqual(urgency, u_dist, places=5)
@@ -217,12 +217,12 @@ class TestSLC(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════
-# 5. 통합 계산 (핵심 시나리오)
+# 5. Integration calculation (key scenarios)
 # ══════════════════════════════════════════════════════════════
 class TestIntegration(unittest.TestCase):
 
     def _make_bus_history(self):
-        """버스 시나리오: 삼성역 존 방향으로 빠르게 이동 (경계 ~200m 앞 도착)"""
+        """Bus scenario: moving quickly toward Samsung Station zone (arrives ~200m before boundary)"""
         points = [
             (37.5012, 127.0276), (37.5030, 127.0310),
             (37.5048, 127.0344), (37.5062, 127.0378),
@@ -231,7 +231,7 @@ class TestIntegration(unittest.TestCase):
         return make_history(points, interval_sec=10)
 
     def _make_stationary_history(self):
-        """정지 시나리오: 존 경계까지 약 200m, 이동 없음"""
+        """Stationary scenario: ~200m from zone boundary, no movement"""
         near_fence = (37.5073, 127.0415)
         return make_history([near_fence] * 5)
 
@@ -255,7 +255,7 @@ class TestIntegration(unittest.TestCase):
         self.assertAlmostEqual(result.slc_multiplier, 1.0)
 
     def test_bus_scenario_high_urgency_near_fence(self):
-        """버스 + 경계 근접 → 긴급도 높고(>0.8), interval 짧음(<10s)"""
+        """Bus + near boundary → high urgency (>0.8), short interval (<10s)"""
         result = calculate_next_interval(
             37.5073, 127.0415, self._make_bus_history(), [SAMSUNG_FENCE]
         )
@@ -277,7 +277,7 @@ class TestIntegration(unittest.TestCase):
         self.assertAlmostEqual(result.slc_multiplier, 2.0)
 
     def test_stationary_scenario_interval_longer_than_bus(self):
-        """정지 interval이 버스 interval보다 훨씬 김 (최소 5배)"""
+        """Stationary interval is much longer than bus interval (at least 5x)"""
         bus = calculate_next_interval(
             37.5073, 127.0415, self._make_bus_history(), [SAMSUNG_FENCE]
         )
@@ -287,19 +287,19 @@ class TestIntegration(unittest.TestCase):
         self.assertGreater(still.next_interval, bus.next_interval * 5)
 
     def test_time_urgency_increases_frequency(self):
-        """ETA가 약속 시간에 촉박할수록 interval이 줄어듦 (multiplier 누적 방지를 위해 vehicle 히스토리 사용)"""
-        # vehicle 히스토리: activity_multiplier=0.3, SLC significant → slc_mult=1.0
-        # → 총 배율이 작아 300s 캡에 걸리지 않음
+        """interval decreases as ETA gets tight relative to appointment time (using vehicle history to avoid multiplier accumulation)"""
+        # vehicle history: activity_multiplier=0.3, SLC significant → slc_mult=1.0
+        # → total multiplier is small, won't hit 300s cap
         points = [(37.5012 + i * 0.0009, 127.0276) for i in range(6)]
         history = make_history(points, interval_sec=10)
         fence_mid = Geofence("mid", 37.52, 127.03, 100)
 
-        # 여유 있음: eta 20분, 약속 3시간
+        # Relaxed: eta 20min, appointment 3hr
         result_relaxed = calculate_next_interval(
             *GANGNAM, history, [fence_mid],
             eta_sec=1200, appointment_remaining_sec=10800,
         )
-        # 촉박: eta 20분, 약속 22분
+        # Tight: eta 20min, appointment 22min
         result_urgent = calculate_next_interval(
             *GANGNAM, history, [fence_mid],
             eta_sec=1200, appointment_remaining_sec=1320,
@@ -308,7 +308,7 @@ class TestIntegration(unittest.TestCase):
         self.assertLess(result_relaxed.u_time, result_urgent.u_time)
 
     def test_max_interval_cap(self):
-        """최대 300초 이상 넘지 않음"""
+        """interval never exceeds 300 seconds"""
         far_fence = Geofence("far", 37.5012 + 0.1, 127.0300, 100)
         result = calculate_next_interval(
             *GANGNAM, self._make_stationary_history(), [far_fence]
@@ -338,7 +338,7 @@ class TestIntegration(unittest.TestCase):
         self.assertEqual(classify_gps_mode(60), "LOW")
 
     def test_result_has_cosine_debug_fields(self):
-        """OptimizationResult에 u_dist, u_time, urgency 포함"""
+        """OptimizationResult includes u_dist, u_time, urgency fields"""
         result = calculate_next_interval(
             *GANGNAM, make_history([GANGNAM] * 2), [SAMSUNG_FENCE]
         )
@@ -350,7 +350,7 @@ class TestIntegration(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════
-# 실행
+# Run
 # ══════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     loader = unittest.TestLoader()

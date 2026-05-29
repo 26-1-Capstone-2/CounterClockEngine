@@ -1,6 +1,6 @@
 """
-사용자별 지각 패턴을 JSON 파일로 저장/조회.
-과거 기록이 쌓일수록 personalized 출발 버퍼를 계산한다.
+Saves and retrieves per-user lateness patterns as JSON files.
+As past records accumulate, a personalized departure buffer is computed.
 """
 
 import json
@@ -26,7 +26,7 @@ class ArrivalRecord:
 
     @property
     def lateness_minutes(self) -> float:
-        """양수 = 지각, 음수 = 일찍 도착."""
+        """Positive = late, negative = arrived early."""
         scheduled = datetime.fromisoformat(self.scheduled_time)
         actual = datetime.fromisoformat(self.actual_arrival_time)
         return (actual - scheduled).total_seconds() / 60
@@ -55,8 +55,8 @@ def save_record(record: ArrivalRecord) -> None:
 
 def recommended_buffer(user_id: str, confidence: float = 0.80) -> float:
     """
-    과거 지각 기록의 분포에서 confidence 백분위수를 출발 버퍼로 반환.
-    기록이 없으면 DEFAULT_BUFFER_MIN을 반환.
+    Returns the confidence percentile of the past lateness record distribution as the departure buffer.
+    Returns DEFAULT_BUFFER_MIN if there are no records.
     """
     records = load_records(user_id)
     if not records:

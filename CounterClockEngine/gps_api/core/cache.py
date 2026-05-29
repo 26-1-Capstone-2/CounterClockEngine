@@ -1,12 +1,12 @@
 """
-DB 서버로부터 Push된 데이터를 보관하는 인메모리 캐시.
+In-memory cache for data pushed from the DB server.
 
-캐시 우선순위:
-  1. 이 캐시 (DB 서버가 Webhook으로 밀어넣은 최신 데이터)
-  2. DBClient 직접 조회 (캐시 미스 fallback)
-  3. 인메모리 store (DB_BASE_URL 미설정 시)
+Cache priority:
+  1. This cache (latest data pushed by the DB server via Webhook)
+  2. DBClient direct query (fallback on cache miss)
+  3. In-memory store (when DB_BASE_URL is not set)
 
-TTL: 기본 300초
+TTL: default 300 seconds
 """
 
 import time
@@ -17,7 +17,7 @@ _TTL_SEC = 300
 _lock = Lock()
 
 # ------------------------------------------------------------------
-# 내부 저장소
+# Internal storage
 # ------------------------------------------------------------------
 
 _appt_cache: dict[str, tuple[dict, float]] = {}        # appointment_id → (data, exp)
@@ -29,7 +29,7 @@ _member_journeys_cache: dict[str, tuple[list, float]] = {}  # member_id → (lis
 
 
 # ------------------------------------------------------------------
-# Appointment (약속)
+# Appointment
 # ------------------------------------------------------------------
 
 def put_appointment(data: dict) -> None:
@@ -69,7 +69,7 @@ def invalidate_appointment(appointment_id: str) -> None:
 
 
 # ------------------------------------------------------------------
-# Participants (참가자 목록)
+# Participants
 # ------------------------------------------------------------------
 
 def put_participants(appointment_id: str, participants: list[dict]) -> None:
@@ -79,7 +79,7 @@ def put_participants(appointment_id: str, participants: list[dict]) -> None:
 
 
 def put_participant(appointment_id: str, participant: dict) -> None:
-    """단일 참가자 upsert (생성·변경 Webhook용)."""
+    """Single participant upsert (for create/update Webhook)."""
     pid = participant.get("participant_id")
     if not pid:
         return
@@ -102,7 +102,7 @@ def get_participants(appointment_id: str) -> Optional[list[dict]]:
 
 
 # ------------------------------------------------------------------
-# Member Settings (멤버 설정 — 버퍼 등)
+# Member Settings (buffer, etc.)
 # ------------------------------------------------------------------
 
 def put_member_settings(member_id: str, data: dict) -> None:
@@ -119,7 +119,7 @@ def get_member_settings(member_id: str) -> Optional[dict]:
 
 
 # ------------------------------------------------------------------
-# Journey (개인 여정)
+# Journey (personal journey)
 # ------------------------------------------------------------------
 
 def put_journey(data: dict) -> None:
@@ -139,7 +139,7 @@ def get_journey(journey_id: str) -> Optional[dict]:
 
 
 def put_member_journeys(member_id: str, journeys: list[dict]) -> None:
-    """멤버의 여정 목록 전체를 캐시에 저장. 각 여정도 개별 캐시에 등록."""
+    """Save the full journey list for a member to cache. Also registers each journey in the individual cache."""
     with _lock:
         _member_journeys_cache[member_id] = (journeys, time.monotonic() + _TTL_SEC)
         expires = time.monotonic() + _TTL_SEC

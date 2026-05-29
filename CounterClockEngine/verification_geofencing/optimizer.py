@@ -1,8 +1,8 @@
 """
-GPS/Geofencing 배터리 최적화 핵심 로직
-- 거리·시간 Cosine Blend Interval
-- Activity Recognition 유사 구현
-- Significant Location Change 유사 구현
+GPS/Geofencing battery optimization core logic
+- Distance/time Cosine Blend Interval
+- Activity Recognition-like implementation
+- Significant Location Change-like implementation
 """
 
 import math
@@ -40,9 +40,9 @@ class OptimizationResult:
     entered_zones: list[str]
     activity_multiplier: float
     slc_multiplier: float
-    u_dist: float       # 거리 긴급도 [0=멀리, 1=근접]
-    u_time: float       # 시간 긴급도 [0=여유, 1=촉박]
-    urgency: float      # 최종 긴급도 [0=여유, 1=매우 긴박]
+    u_dist: float       # Distance urgency [0=far, 1=near]
+    u_time: float       # Time urgency [0=relaxed, 1=tight]
+    urgency: float      # Final urgency [0=relaxed, 1=very urgent]
 
 
 def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -54,17 +54,17 @@ def haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-# ── Cosine Blend 파라미터 ─────────────────────────────────────────
+# ── Cosine Blend parameters ──────────────────────────────────────────
 INTERVAL_MIN_S  = 3
 INTERVAL_MAX_S  = 300
 D_MAX_M         = 3000.0
-TIME_ALPHA      = 0.5    # 0=시간만, 1=거리만 (0.5: 균등 혼합)
-# ────────────────────────────────────────────────────────────────
+TIME_ALPHA      = 0.5    # 0=time only, 1=distance only (0.5: equal blend)
+# ────────────────────────────────────────────────────────────────────
 
-# sigmoid 전환 기준점(m/s)과 가파름(steepness)
+# sigmoid transition boundary (m/s) and steepness
 # stationary→walking: 0.5 m/s, walking→vehicle: 8.0 m/s
 _ACT_BOUNDARY  = (0.5,  8.0)
-_ACT_STEEPNESS = (10.0, 2.0)   # 클수록 경계가 선명, 작을수록 완만
+_ACT_STEEPNESS = (10.0, 2.0)   # Higher = sharper boundary, lower = smoother
 _ACT_ANCHORS   = (3.0,  1.0, 0.3)  # stationary / walking / vehicle multiplier
 
 SLC_THRESHOLD_M = 500
@@ -78,25 +78,25 @@ def _cosine_blend_interval(
     alpha: float = TIME_ALPHA,
 ) -> tuple[float, float, float, float]:
     """
-    두 긴급도 신호를 cosine 곡선으로 혼합해 raw interval(초)을 반환.
+    Blend two urgency signals with a cosine curve and return raw interval (seconds).
     Returns: (raw_interval, u_dist, u_time, urgency)
 
     urgency=0 → INTERVAL_MAX_S,  urgency=1 → INTERVAL_MIN_S
     """
-    # 거리 긴급도: 목적지에 가까울수록 1
+    # Distance urgency: closer to destination → 1
     d_clamped = max(0.0, min(distance_to_fence, D_MAX_M))
     u_dist = 1.0 - d_clamped / D_MAX_M
 
-    # 시간 긴급도: eta가 남은 약속 시간 대비 클수록 1
+    # Time urgency: higher ratio of eta to remaining appointment time → 1
     if eta_sec is not None and appointment_remaining_sec and appointment_remaining_sec > 0:
         u_time = min(max(eta_sec / appointment_remaining_sec, 0.0), 1.0)
     else:
-        u_time = u_dist  # 시간 정보 없으면 거리 긴급도로 대체
+        u_time = u_dist  # Fall back to distance urgency if no time info
 
     urgency = alpha * u_dist + (1.0 - alpha) * u_time
     urgency = max(0.0, min(1.0, urgency))
 
-    # cosine 곡선: urgency 0→1 일 때 interval MAX→MIN
+    # Cosine curve: as urgency goes 0→1, interval goes MAX→MIN
     raw = INTERVAL_MIN_S + 0.5 * (INTERVAL_MAX_S - INTERVAL_MIN_S) * (1.0 + math.cos(math.pi * urgency))
     return raw, u_dist, u_time, urgency
 
@@ -116,11 +116,11 @@ def _compute_avg_speed(history: list[LocationPoint]) -> Optional[float]:
 
 def smooth_activity_multiplier(avg_speed: float) -> float:
     """
-    속도(m/s)를 sigmoid 두 개로 부드럽게 multiplier에 매핑.
+    Smoothly maps speed (m/s) to a multiplier using two sigmoids.
 
-    경계:  0.5 m/s (stationary→walking),  8.0 m/s (walking→vehicle)
+    Boundaries:  0.5 m/s (stationary→walking),  8.0 m/s (walking→vehicle)
     anchors: 3.0 → 1.0 → 0.3
-    공식:  mult = m0 - (m0-m1)*s1 - (m1-m2)*s2
+    Formula:  mult = m0 - (m0-m1)*s1 - (m1-m2)*s2
     """
     v1, v2 = _ACT_BOUNDARY
     k1, k2 = _ACT_STEEPNESS

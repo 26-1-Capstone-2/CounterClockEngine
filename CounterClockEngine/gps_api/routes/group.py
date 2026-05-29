@@ -1,29 +1,23 @@
 """
-그룹 약속 API
+Group Appointment API
 
 REST:
-  POST   /api/group/create              — 그룹 생성
-  POST   /api/group/<id>/join           — 그룹 참가
-  POST   /api/group/<id>/location       — 위치 업데이트 + 전체 ETA 재계산 + broadcast
-  GET    /api/group/<id>                — 그룹 현황 조회
-  POST   /api/group/<id>/arrive         — 도착 처리
-  DELETE /api/group/<id>/leave          — 그룹 탈퇴
+  POST   /api/group/create              — Create a group
+  POST   /api/group/<id>/join           — Join a group
+  POST   /api/group/<id>/location       — Update location + recalculate all ETAs
+  GET    /api/group/<id>                — Get group status
+  POST   /api/group/<id>/arrive         — Mark arrival
+  DELETE /api/group/<id>/leave          — Leave a group
 
-WebSocket:
-  client → server : emit("join_group",  {"group_id": "..."})
-  server → client : emit("group_update", {group_summary})          — 그룹 전체 ETA 현황
-  client → server : emit("join_member", {"member_id": "..."})      — 개인 room 입장
-  server → client : emit("request_gps", {"group_id", "next_interval_sec", "gps_mode"})
-                                                                    — GPS 신호 전송 요청
+WebSocket and client Push are handled by the Spring server.
+Engine (CounterClockEngine) returns calculation results only via REST response.
 """
 
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify, abort
-from flask_socketio import join_room, emit as ws_emit
 
 from gps_api.core import group as group_core
-from gps_api.extensions import socketio
 
 bp = Blueprint("group", __name__)
 
@@ -31,7 +25,7 @@ bp = Blueprint("group", __name__)
 @bp.post("/join-by-invite")
 def join_by_invite():
     """
-    초대 코드로 약속을 찾아 참가합니다.
+    Finds and joins an appointment using an invite code.
 
     Request JSON:
       {
@@ -39,7 +33,7 @@ def join_by_invite():
         "member_id": "user_002",
         "name": "이영희",
         "travel_mode": "transit",           // optional
-        "origin": [37.4979, 127.0276],      // optional (출발지 좌표)
+        "origin": [37.4979, 127.0276],      // optional (origin coordinates)
         "origin_name": "집",                // optional
         "origin_address": "서울시 ..."      // optional
       }
@@ -104,7 +98,7 @@ def _parse_dt(value: str) -> datetime:
 @bp.post("/create")
 def create():
     """
-    그룹을 생성합니다.
+    Creates a group.
 
     Request JSON:
       {
@@ -142,7 +136,7 @@ def create():
 @bp.post("/<group_id>/join")
 def join(group_id: str):
     """
-    그룹에 참가합니다.
+    Joins a group.
 
     Request JSON:
       { "user_id": "user_001", "name": "김철수" }
@@ -186,15 +180,35 @@ def join(group_id: str):
 @bp.post("/<group_id>/location")
 def update_location(group_id: str):
     """
-    참가자의 현재 위치를 업데이트합니다.
-    서버에서 전체 참가자 ETA를 병렬 계산하고
-    WebSocket으로 그룹 전체에 결과를 broadcast합니다.
+    Updates a participant's current location.
+    Computes ETAs for all participants in parallel and returns the results.
+    Client Push (WebSocket/FCM) is handled by Spring after receiving this response.
 
     Request JSON:
       {
         "user_id": "user_001",
         "current_loc": [37.4979, 127.0276],
         "kakao_api_key": "..."   // optional
+      }
+
+    Response JSON:
+      {
+        "summary": {
+          "group_id": "uuid",
+          "participants": [
+            {
+              "member_id": "user_001",
+              "name": "김철수",
+              "eta_sec": 540,
+              "eta_min": 9.0,
+              "status": "on_time"
+            }
+          ]
+        },
+        "gps_intervals": {
+          "user_001": { "next_interval_sec": 10, "gps_mode": "HIGH" },
+          "user_002": { "next_interval_sec": 30, "gps_mode": "BALANCED" }
+        }
       }
     """
     body = request.get_json(silent=True) or {}
@@ -210,22 +224,12 @@ def update_location(group_id: str):
         abort(404, description="Group or user not found.")
 
     summary, gps_intervals = result
-    socketio.emit("group_update", summary, room=group_id)
-
-    # 각 참가자 개인 room으로 GPS 재전송 트리거를 emit
-    for mid, interval_info in gps_intervals.items():
-        socketio.emit(
-            "request_gps",
-            {"group_id": group_id, **interval_info},
-            room=f"member:{mid}",
-        )
-
-    return jsonify(summary)
+    return jsonify({"summary": summary, "gps_intervals": gps_intervals})
 
 
 @bp.get("/<group_id>")
 def get_group(group_id: str):
-    """그룹의 현재 ETA 현황을 반환합니다."""
+    """Returns the current ETA status of the group."""
     group = group_core.get_group(group_id)
     if not group:
         abort(404, description=f"Group '{group_id}' not found.")
@@ -235,11 +239,19 @@ def get_group(group_id: str):
 @bp.post("/<group_id>/arrive")
 def arrive(group_id: str):
     """
-    참가자가 도착했음을 알립니다.
-    WebSocket으로 그룹 전체에 broadcast됩니다.
+    Notifies that a participant has arrived.
+    Spring receives this response's summary and pushes it to the entire group.
 
     Request JSON:
       { "user_id": "user_001" }
+
+    Response JSON:
+      {
+        "group_id": "uuid",
+        "user_id": "user_001",
+        "status": "arrived",
+        "summary": { ... }
+      }
     """
     body = request.get_json(silent=True) or {}
     user_id = body.get("user_id")
@@ -250,14 +262,13 @@ def arrive(group_id: str):
     if summary is None:
         abort(404, description="Group or user not found.")
 
-    socketio.emit("group_update", summary, room=group_id)
-    return jsonify({"group_id": group_id, "user_id": user_id, "status": "arrived"})
+    return jsonify({"group_id": group_id, "user_id": user_id, "status": "arrived", "summary": summary})
 
 
 @bp.delete("/<group_id>/leave")
 def leave(group_id: str):
     """
-    그룹에서 탈퇴합니다.
+    Leaves a group.
 
     Request JSON:
       { "user_id": "user_001" }
@@ -272,43 +283,6 @@ def leave(group_id: str):
         abort(404, description="Group or user not found.")
 
     group = group_core.get_group(group_id)
-    if group:
-        socketio.emit("group_update", group_core.get_group_summary(group), room=group_id)
+    summary = group_core.get_group_summary(group) if group else None
 
-    return jsonify({"group_id": group_id, "user_id": user_id, "left": True})
-
-
-# ------------------------------------------------------------------
-# WebSocket event handlers
-# ------------------------------------------------------------------
-
-@socketio.on("join_group")
-def handle_join_group(data):
-    """
-    클라이언트가 그룹 room에 입장합니다.
-    이후 해당 그룹의 group_update 이벤트를 수신합니다.
-
-    emit("join_group", {"group_id": "..."})
-    """
-    group_id = data.get("group_id")
-    if not group_id:
-        return
-    join_room(group_id)
-
-    group = group_core.get_group(group_id)
-    if group:
-        socketio.emit("group_update", group_core.get_group_summary(group), room=group_id)
-
-
-@socketio.on("join_member")
-def handle_join_member(data):
-    """
-    클라이언트가 개인 room에 입장합니다.
-    이후 서버가 GPS 신호를 보내라는 request_gps 이벤트를 이 room으로 emit합니다.
-
-    emit("join_member", {"member_id": "..."})
-    """
-    member_id = data.get("member_id")
-    if not member_id:
-        return
-    join_room(f"member:{member_id}")
+    return jsonify({"group_id": group_id, "user_id": user_id, "left": True, "summary": summary})

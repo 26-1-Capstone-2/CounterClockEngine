@@ -1,17 +1,55 @@
 """
-ODSAY 대중교통 길찾기 API 연동
-- 출발지/목적지 좌표 → 지하철+버스 혼합 경로
-- API 키: https://lab.odsay.com (무료 가입 후 발급)
-- 환경변수: ODSAY_API_KEY
+ODSAY public transit directions API integration
+- Origin/destination coordinates → mixed subway+bus route
+- API key: https://lab.odsay.com (free registration required)
+- Environment variable: ODSAY_API_KEY
 """
 
 import requests
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+# Last train search result cache: key → (result, expires_at)
+# key: (origin_lat_r, origin_lon_r, dest_lat_r, dest_lon_r, date)
+_last_train_cache: dict = {}
+
+
+def _next_4am(now: datetime) -> datetime:
+    """Returns the next 04:00 relative to the current time (tomorrow's 04:00 if today's 04:00 has passed)."""
+    candidate = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    if now >= candidate:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _cache_key(origin_lat: float, origin_lon: float,
+               dest_lat: float, dest_lon: float,
+               base_dt: datetime) -> tuple:
+    """Generate cache key rounded to 2 decimal places (~1.1km granularity)."""
+    return (
+        round(origin_lat, 2), round(origin_lon, 2),
+        round(dest_lat, 2),   round(dest_lon, 2),
+        base_dt.date(),
+    )
+
+
+def _cache_get(key: tuple):
+    entry = _last_train_cache.get(key)
+    if entry is None:
+        return None
+    result, expires_at = entry
+    if datetime.now() >= expires_at:
+        del _last_train_cache[key]
+        return None
+    return result
+
+
+def _cache_set(key: tuple, result) -> None:
+    _last_train_cache[key] = (result, _next_4am(datetime.now()))
+
 ODSAY_BASE_URL = "https://api.odsay.com/v1/api"
 
-# ODSAY trafficType 코드
+# ODSAY trafficType codes
 TRAFFIC_TYPE = {1: "SUBWAY", 2: "BUS", 3: "WALK"}
 TRAFFIC_LABEL = {"SUBWAY": "지하철", "BUS": "버스", "WALK": "도보"}
 
@@ -24,6 +62,13 @@ class TransitLeg:
     coords: list[tuple[float, float]] = field(default_factory=list)
 
 
+# transport_mode → ODSAY SearchType
+SEARCH_TYPE_MAP = {"ALL": 0, "SUBWAY": 1, "BUS": 2}
+
+# priority_type → ODSAY OPT
+PRIORITY_OPT_MAP = {"MIN_TIME": 0, "MIN_TRANSFER": 1, "MIN_WALK": 2}
+
+
 def fetch_transit_route(
     origin_lat: float,
     origin_lon: float,
@@ -31,18 +76,22 @@ def fetch_transit_route(
     dest_lon: float,
     api_key: str,
     search_dt: datetime | None = None,
+    search_type: int = 0,
+    opt: int = 0,
 ) -> tuple[list[tuple[float, float]], int, int, list[TransitLeg]]:
     """
-    ODSAY 대중교통 경로 조회.
+    ODSAY public transit route query.
 
     Args:
-        search_dt: 출발 시각 기준 조회 (None이면 현재 시각 기준)
+        search_dt  : Query based on departure time (defaults to current time if None)
+        search_type: ODSAY SearchType — 0=subway+bus(ALL), 1=subway(SUBWAY), 2=bus(BUS)
+        opt        : ODSAY OPT — 0=shortest time(MIN_TIME), 1=min transfers(MIN_TRANSFER), 2=min walking(MIN_WALK)
 
     Returns:
-        coords      : [(lat, lon), ...] 전체 경로 좌표
-        duration_sec: 총 소요 시간 (초)
-        distance_m  : 총 거리 (미터)
-        legs        : 구간별 TransitLeg 목록
+        coords      : [(lat, lon), ...] full route coordinates
+        duration_sec: total travel time (seconds)
+        distance_m  : total distance (meters)
+        legs        : list of TransitLeg objects per segment
     """
     params = {
         "apiKey": api_key,
@@ -50,8 +99,8 @@ def fetch_transit_route(
         "SY": origin_lat,
         "EX": dest_lon,
         "EY": dest_lat,
-        "OPT": 0,          # 0=최단시간
-        "SearchType": 0,   # 0=지하철+버스
+        "OPT": opt,
+        "SearchType": search_type,
         "lang": 0,
     }
     if search_dt is not None:
@@ -65,11 +114,11 @@ def fetch_transit_route(
     data = resp.json()
 
     if "error" in data:
-        raise ValueError(f"ODSAY 오류: {data['error'].get('message', data['error'])}")
+        raise ValueError(f"ODSAY error: {data['error'].get('message', data['error'])}")
 
     paths = (data.get("result") or {}).get("path", [])
     if not paths:
-        raise ValueError("ODSAY 경로 응답이 비어 있습니다.")
+        raise ValueError("ODSAY route response is empty.")
 
     path = paths[0]
     info = path.get("info", {})
@@ -88,7 +137,7 @@ def fetch_transit_route(
 
         seg_coords: list[tuple[float, float]] = []
 
-        # 정류장/역 좌표 목록
+        # Station/stop coordinate list
         for st in (sub.get("passStopList") or {}).get("stations", []):
             x = st.get("x") or st.get("lon")
             y = st.get("y") or st.get("lat")
@@ -98,7 +147,7 @@ def fetch_transit_route(
                 except (TypeError, ValueError):
                     pass
 
-        # passShape polyline (상세 선형) — "lon,lat lon,lat ..." 형식
+        # passShape polyline (detailed geometry) — "lon,lat lon,lat ..." format
         if not seg_coords:
             shape = (sub.get("passShape") or {}).get("polyline", "")
             for pair in shape.split():
@@ -109,7 +158,7 @@ def fetch_transit_route(
                     except ValueError:
                         pass
 
-        # 좌표 없으면 출발·도착 역만
+        # If no coordinates, use only departure/arrival station
         if not seg_coords:
             sx = sub.get("startX") or sub.get("startStation", {}).get("x")
             sy = sub.get("startY") or sub.get("startStation", {}).get("y")
@@ -125,9 +174,18 @@ def fetch_transit_route(
         all_coords.extend(seg_coords)
 
     if not all_coords:
-        raise ValueError("ODSAY 경로 좌표를 추출할 수 없습니다.")
+        raise ValueError("Unable to extract ODSAY route coordinates.")
 
     return all_coords, int(duration_sec), int(total_dist), legs
+
+
+def first_walk_min(legs: list[TransitLeg]) -> int:
+    """Returns the travel time (minutes) of the first WALK segment in the subPath legs. Returns 0 if none."""
+    for leg in legs:
+        if leg.mode == "WALK":
+            return round(leg.duration_sec / 60)
+        break  # If the first segment is not WALK, no walking to station
+    return 0
 
 
 def find_last_train_departure(
@@ -137,45 +195,63 @@ def find_last_train_departure(
     dest_lon: float,
     api_key: str,
     base_dt: datetime,
-) -> tuple[datetime, int] | None:
+    search_type: int = 0,
+    opt: int = 0,
+) -> tuple[datetime, int, int] | None:
     """
-    이진 탐색으로 유효한 마지막 대중교통 출발 시각을 찾는다.
+    Finds the last valid public transit departure time using binary search.
 
-    탐색 범위: 당일 23:00 ~ 익일 01:00 (자정 넘김 자동 처리)
+    Search range: 23:00 on the same day to 01:00 the next day (midnight crossover handled automatically)
+    Results are cached until 04:00 the next day.
+
+    Args:
+        search_type: ODSAY SearchType (0=ALL, 1=SUBWAY, 2=BUS)
+        opt        : ODSAY OPT (0=MIN_TIME, 1=MIN_TRANSFER, 2=MIN_WALK)
 
     Returns:
-        (last_departure_dt, duration_sec) 또는 None (막차 없음)
+        (last_departure_dt, duration_sec, walk_to_station_min) or None (no last train)
     """
+    key = _cache_key(origin_lat, origin_lon, dest_lat, dest_lon, base_dt)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+
     base_date = base_dt.date()
     lo = datetime(base_date.year, base_date.month, base_date.day, 23, 0)
-    hi = lo + timedelta(hours=2)  # 익일 01:00
+    hi = lo + timedelta(hours=2)  # Next day 01:00
 
-    # hi에서 유효한 경로가 없으면 탐색 범위 내 막차가 없는 것
+    # If no valid route exists at hi, there is no last train within the search range
     try:
-        fetch_transit_route(origin_lat, origin_lon, dest_lat, dest_lon, api_key, hi)
+        fetch_transit_route(origin_lat, origin_lon, dest_lat, dest_lon, api_key, hi,
+                            search_type=search_type, opt=opt)
     except ValueError:
-        # hi가 막히면 lo부터 시작해 유효 여부 확인 후 탐색
         try:
-            fetch_transit_route(origin_lat, origin_lon, dest_lat, dest_lon, api_key, lo)
+            fetch_transit_route(origin_lat, origin_lon, dest_lat, dest_lon, api_key, lo,
+                                search_type=search_type, opt=opt)
         except ValueError:
             return None
 
     last_valid_dt: datetime | None = None
     last_valid_duration: int = 0
+    last_valid_walk_min: int = 0
 
-    while (hi - lo).total_seconds() > 60:  # 1분 단위 정밀도
+    while (hi - lo).total_seconds() > 60:  # 1-minute precision
         mid = lo + (hi - lo) / 2
         try:
-            _, duration_sec, _, _ = fetch_transit_route(
-                origin_lat, origin_lon, dest_lat, dest_lon, api_key, mid
+            _, duration_sec, _, legs = fetch_transit_route(
+                origin_lat, origin_lon, dest_lat, dest_lon, api_key, mid,
+                search_type=search_type, opt=opt,
             )
-            last_valid_dt = mid
+            last_valid_dt       = mid
             last_valid_duration = duration_sec
+            last_valid_walk_min = first_walk_min(legs)
             lo = mid + timedelta(minutes=1)
         except ValueError:
             hi = mid - timedelta(minutes=1)
 
-    return (last_valid_dt, last_valid_duration) if last_valid_dt else None
+    result = (last_valid_dt, last_valid_duration, last_valid_walk_min) if last_valid_dt else None
+    _cache_set(key, result)
+    return result
 
 
 def resample_transit_route(
@@ -184,8 +260,8 @@ def resample_transit_route(
     step_sec: int = 5,
 ) -> list[tuple[float, float, str]]:
     """
-    구간별 좌표를 step_sec 간격으로 리샘플링.
-    각 포인트에 구간 모드를 태깅: (lat, lon, mode)
+    Resample per-segment coordinates at step_sec intervals.
+    Tags each point with the segment mode: (lat, lon, mode)
     """
     import math
 
@@ -205,7 +281,7 @@ def resample_transit_route(
             result.append((leg.coords[0][0], leg.coords[0][1], leg.mode))
             continue
 
-        # 누적 거리 계산
+        # Cumulative distance calculation
         cum = [0.0]
         for i in range(1, len(leg.coords)):
             cum.append(cum[-1] + _haversine(leg.coords[i-1], leg.coords[i]))

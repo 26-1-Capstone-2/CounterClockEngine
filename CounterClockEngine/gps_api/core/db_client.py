@@ -1,14 +1,14 @@
 """
-외부 DB 서버 HTTP 클라이언트.
+External DB server HTTP client.
 
-DB 서버가 아래 REST API를 제공한다고 가정합니다.
-실제 DB 서버의 엔드포인트/필드명이 다를 경우 이 파일만 수정하면 됩니다.
+Assumes the DB server provides the following REST API.
+If the actual DB server's endpoints/field names differ, only this file needs to be modified.
 
 ────────────────────────────────────────
-테이블별 예상 응답 형식
+Expected response format per table
 ────────────────────────────────────────
 
-[멤버]
+[Member]
   GET /members/{id}
   {
     "member_id": "...", "email": "...", "nickname": "...",
@@ -16,21 +16,21 @@ DB 서버가 아래 REST API를 제공한다고 가정합니다.
     "home_lat": 37.4979, "home_lon": 127.0276
   }
 
-[멤버 설정]
+[Member Settings]
   GET /members/{id}/settings
   {
     "setting_id": "...", "member_id": "...",
-    "buffer_minutes": 10,          ← 여유 시간
-    "preferred_transit": "transit",  ← 선호 대중교통
-    "route_priority": "RECOMMEND"    ← 경로 우선순위
+    "buffer_minutes": 10,          ← buffer time
+    "preferred_transit": "transit",  ← preferred transit mode
+    "route_priority": "RECOMMEND"    ← route priority
   }
 
-[장소]
+[Place]
   GET /members/{id}/places
   [ { "place_id": "...", "member_id": "...", "place_type": "work",
       "place_name": "회사", "address": "...", "lat": ..., "lon": ... }, ... ]
 
-[여정]
+[Journey]
   GET  /journeys/{id}
   GET  /members/{id}/journeys
   POST /journeys
@@ -38,7 +38,7 @@ DB 서버가 아래 REST API를 제공한다고 가정합니다.
   {
     "journey_id": "...", "member_id": "...", "title": "...",
     "journey_type": "one_way",
-    "last_train": false,             ← 막차 여부
+    "last_train": false,             ← last train flag
     "planned_date": "2026-05-23",
     "travel_mode": "transit",
     "origin_name": "집", "origin_address": "...",
@@ -49,12 +49,12 @@ DB 서버가 아래 REST API를 제공한다고 가정합니다.
     "goal_time": "2026-05-23T09:00:00",
     "eta": null,
     "alarm_time": null,
-    "repeat_days": "MON,WED,FRI",   ← 반복 요일 (없으면 null)
+    "repeat_days": "MON,WED,FRI",   ← repeat days (null if none)
     "status": "unknown",
     "alarm_enabled": true
   }
 
-[약속]
+[Appointment]
   GET /appointments/{id}
   GET /appointments/invite/{code}
   {
@@ -67,7 +67,7 @@ DB 서버가 아래 REST API를 제공한다고 가정합니다.
     "invite_code": "ABC123"
   }
 
-[참여자]
+[Participant]
   GET  /appointments/{id}/participants
   POST /appointments/{id}/participants
   PATCH /participants/{id}
@@ -113,28 +113,28 @@ class DBClient:
         return resp.json()
 
     # ------------------------------------------------------------------
-    # 멤버 (Member)
+    # Member
     # ------------------------------------------------------------------
 
     def get_member(self, member_id: str) -> Optional[dict]:
-        """멤버 정보 조회 (집 위도/경도 포함)."""
+        """Retrieve member info (including home latitude/longitude)."""
         return self._get(f"/members/{member_id}")
 
     def get_member_settings(self, member_id: str) -> Optional[dict]:
-        """멤버 설정 조회 (여유 시간, 선호 교통수단, 경로 우선순위)."""
+        """Retrieve member settings (buffer time, preferred transit, route priority)."""
         return self._get(f"/members/{member_id}/settings")
 
     # ------------------------------------------------------------------
-    # 장소 (Place)
+    # Place
     # ------------------------------------------------------------------
 
     def get_places(self, member_id: str) -> list[dict]:
-        """멤버의 저장된 장소 목록 조회."""
+        """Retrieve saved place list for a member."""
         result = self._get(f"/members/{member_id}/places")
         return result if isinstance(result, list) else []
 
     # ------------------------------------------------------------------
-    # 여정 (Journey)
+    # Journey
     # ------------------------------------------------------------------
 
     def get_journey(self, journey_id: str) -> Optional[dict]:
@@ -146,29 +146,29 @@ class DBClient:
 
     def update_journey(self, journey_id: str, **fields) -> dict:
         """
-        여정의 현재 위치·ETA·상태·알람 시각을 업데이트.
+        Update the current location, ETA, status, and alarm time of a journey.
 
-        지원 필드:
-          current_lat, current_lon  — 현재 위도/경도
-          eta                       — 도착 예정 시간(초)
-          alarm_time                — 출발 알람 시각 (ISO 8601)
-          status                    — 여정 상태
+        Supported fields:
+          current_lat, current_lon  — current latitude/longitude
+          eta                       — estimated arrival time (seconds)
+          alarm_time                — departure alarm time (ISO 8601)
+          status                    — journey status
         """
         return self._patch(f"/journeys/{journey_id}", fields)
 
     # ------------------------------------------------------------------
-    # 약속 (Appointment)
+    # Appointment
     # ------------------------------------------------------------------
 
     def get_appointment(self, appointment_id: str) -> Optional[dict]:
         return self._get(f"/appointments/{appointment_id}")
 
     def get_appointment_by_invite(self, invite_code: str) -> Optional[dict]:
-        """초대 코드로 약속 조회."""
+        """Retrieve appointment by invite code."""
         return self._get(f"/appointments/invite/{invite_code}")
 
     # ------------------------------------------------------------------
-    # 참여자 (Participant)
+    # Participant
     # ------------------------------------------------------------------
 
     def get_participants(self, appointment_id: str) -> list[dict]:
@@ -177,12 +177,12 @@ class DBClient:
 
     def update_participant(self, participant_id: str, **fields) -> dict:
         """
-        참여자의 위치·ETA·상태·알람 시각을 DB에 write-back.
+        Write back participant location, ETA, status, and alarm time to DB.
 
-        지원 필드:
-          current_lat, current_lon  — 현재 위도/경도
-          eta                       — 도착 예정 시간(초)
-          alarm_time                — 출발 알람 시각 (ISO 8601)
-          status                    — 참여자 상태
+        Supported fields:
+          current_lat, current_lon  — current latitude/longitude
+          eta                       — estimated arrival time (seconds)
+          alarm_time                — departure alarm time (ISO 8601)
+          status                    — participant status
         """
         return self._patch(f"/participants/{participant_id}", fields)

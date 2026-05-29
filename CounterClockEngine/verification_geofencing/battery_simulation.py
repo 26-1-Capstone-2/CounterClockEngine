@@ -1,7 +1,7 @@
 """
-GPS 시뮬레이션 + 배터리 절약률 측정
-- 실제 이동 경로를 재현하여 일반 모드 vs 최적화 모드 비교
-- 시나리오: 강남역 → 삼성역 버스 이동 후 삼성역 근처 정지
+GPS simulation + battery savings measurement
+- Reproduce actual movement route to compare normal mode vs optimized mode
+- Scenario: Gangnam Station → Samsung Station bus trip then stop near Samsung Station
 """
 
 import sys
@@ -17,17 +17,17 @@ from optimizer import (
 )
 
 
-# ── 배터리 소모 모델 ───────────────────────────────────────────
-# GPS 정확도별 시간당 배터리 소모율 (%)
-# 실측 기반 추정값 (Android HIGH_ACCURACY 기준 ~12%/hr)
+# ── Battery drain model ────────────────────────────────────────
+# Battery drain rate per second by GPS accuracy (%)
+# Estimated from real measurements (Android HIGH_ACCURACY baseline ~12%/hr)
 BATTERY_DRAIN_PER_SEC = {
     "HIGH":     12.0 / 3600,   # ~0.00333 %/s
     "BALANCED":  5.0 / 3600,   # ~0.00139 %/s
     "LOW":       1.5 / 3600,   # ~0.00042 %/s
-    "OFF":       0.1 / 3600,   # 거의 없음 (백그라운드 최소)
+    "OFF":       0.1 / 3600,   # Negligible (minimal background)
 }
 
-# 일반 앱(카카오맵 내비) 모드: 항상 HIGH, 1초 간격
+# Normal app (Kakao Maps navigation) mode: always HIGH, 1s interval
 NORMAL_MODE_DRAIN = BATTERY_DRAIN_PER_SEC["HIGH"]
 
 
@@ -38,7 +38,7 @@ class SimulationLog:
     lon: float
     gps_mode: str
     interval: int
-    battery_drain: float   # 누적 배터리 소모 (%)
+    battery_drain: float   # Cumulative battery drain (%)
     distance_to_fence: float
     activity: str
 
@@ -60,33 +60,34 @@ class SimulationResult:
         return self.total_gps_calls / (self.duration_sec / 60)
 
 
-# ── 이동 경로 생성 ─────────────────────────────────────────────
+# ── Route generation ──────────────────────────────────────────
 def generate_route(noise: float = 0.00002) -> list[tuple]:
     """
-    강남역 → 삼성역 버스 이동 후 삼성역 근처 정지하는 경로 생성
-    총 약 20분 시뮬레이션용 좌표 시퀀스 반환
+    Generate a route simulating bus trip from Gangnam Station to Samsung Station
+    then stopping near Samsung Station.
+    Returns a coordinate sequence for ~20 min simulation.
     (lat, lon, speed_phase)
     """
     route = []
 
-    # Phase 1: 버스로 이동 (약 8분, 강남→삼성)
+    # Phase 1: Bus travel (about 8 min, Gangnam → Samsung)
     start = (37.4980, 127.0210)
     end   = (37.5088, 127.0632)
-    steps = 48  # 10초 간격 × 48 = 480초
+    steps = 48  # 10s interval × 48 = 480s
     for i in range(steps):
         t = i / steps
         lat = start[0] + (end[0] - start[0]) * t + random.uniform(-noise, noise)
         lon = start[1] + (end[1] - start[1]) * t + random.uniform(-noise, noise)
         route.append((lat, lon, "vehicle"))
 
-    # Phase 2: 삼성역 근처 도보 (약 5분)
+    # Phase 2: Walking near Samsung Station (about 5 min)
     base = end
     for i in range(30):
         lat = base[0] + random.uniform(-0.0003, 0.0003)
         lon = base[1] + random.uniform(-0.0003, 0.0003)
         route.append((lat, lon, "walking"))
 
-    # Phase 3: 삼성역 안에서 정지 (약 7분)
+    # Phase 3: Stationary inside Samsung Station (about 7 min)
     stop = (37.5088, 127.0635)
     for _ in range(42):
         lat = stop[0] + random.uniform(-0.00005, 0.00005)
@@ -96,7 +97,7 @@ def generate_route(noise: float = 0.00002) -> list[tuple]:
     return route
 
 
-# ── 일반 모드 시뮬레이션 ──────────────────────────────────────
+# ── Normal mode simulation ────────────────────────────────────
 def simulate_normal_mode(
     route: list[tuple],
     interval_sec: int = 1,
@@ -105,7 +106,7 @@ def simulate_normal_mode(
     departure_time: datetime = None,
 ) -> SimulationResult:
     """
-    기존 내비게이션 앱 방식: 항상 1초마다 HIGH 정확도 GPS 호출
+    Legacy navigation app approach: always calls HIGH accuracy GPS every 1 second
     """
     if geofences is None:
         geofences = [Geofence("samsung", 37.5088, 127.0632, 200)]
@@ -142,7 +143,7 @@ def simulate_normal_mode(
     return result
 
 
-# ── 최적화 모드 시뮬레이션 ────────────────────────────────────
+# ── Optimized mode simulation ─────────────────────────────────
 def simulate_optimized_mode(
     route: list[tuple],
     step_sec: int = 10,
@@ -150,7 +151,7 @@ def simulate_optimized_mode(
     departure_time: datetime = None,
 ) -> SimulationResult:
     """
-    우리 서비스 방식: 거리+Activity+SLC 기반 동적 interval
+    Our service approach: dynamic interval based on distance + Activity + SLC
     """
     if geofences is None:
         geofences = [Geofence("samsung", 37.5088, 127.0632, 200)]
@@ -172,11 +173,11 @@ def simulate_optimized_mode(
         t = base_time + timedelta(seconds=i * step_sec)
         elapsed = i * step_sec
 
-        # 이번 스텝에서 GPS 호출이 예정되어 있는가
+        # Check if GPS call is scheduled for this step
         if elapsed < next_call_at:
             continue
 
-        # GPS 호출 수행
+        # Perform GPS call
         point = LocationPoint(lat, lon, t)
         history_deque.append(point)
         if len(history_deque) > 5:
@@ -185,7 +186,7 @@ def simulate_optimized_mode(
         opt = calculate_next_interval(lat, lon, history_deque, geofences)
         next_call_at = elapsed + opt.next_interval
 
-        # 배터리 소모: 이번 interval 동안 해당 모드 소모
+        # Battery drain: consume at this mode's rate for the current interval
         drain_rate = BATTERY_DRAIN_PER_SEC[opt.gps_mode]
         drain = drain_rate * opt.next_interval
 
@@ -203,7 +204,7 @@ def simulate_optimized_mode(
     return result
 
 
-# ── 비교 리포트 출력 ──────────────────────────────────────────
+# ── Comparison report output ──────────────────────────────────
 def print_report(normal: SimulationResult, optimized: SimulationResult, scenario: str = ""):
     saving_battery = (
         (normal.total_battery_drain - optimized.total_battery_drain)
@@ -217,64 +218,64 @@ def print_report(normal: SimulationResult, optimized: SimulationResult, scenario
     duration_min = normal.duration_sec / 60
 
     print("\n" + "=" * 60)
-    print("  GPS 배터리 최적화 시뮬레이션 결과")
+    print("  GPS Battery Optimization Simulation Results")
     print("=" * 60)
-    print(f"  시뮬레이션 시간: {duration_min:.0f}분")
+    print(f"  Simulation duration: {duration_min:.0f} min")
     if scenario:
-        print(f"  시나리오: {scenario}")
+        print(f"  Scenario: {scenario}")
     print("-" * 60)
-    print(f"  {'항목':<25} {'일반 모드':>10} {'최적화 모드':>12}")
+    print(f"  {'Item':<25} {'Normal Mode':>10} {'Optimized Mode':>12}")
     print("-" * 60)
-    print(f"  {'배터리 소모 (%)':.<25} {normal.total_battery_drain:>9.3f}% {optimized.total_battery_drain:>11.3f}%")
-    print(f"  {'시간당 배터리 소모':.<25} {normal.battery_per_hour:>9.2f}% {optimized.battery_per_hour:>11.2f}%")
-    print(f"  {'GPS 호출 횟수':.<25} {normal.total_gps_calls:>10,} {optimized.total_gps_calls:>12,}")
-    print(f"  {'분당 GPS 호출':.<25} {normal.calls_per_min:>9.1f}회 {optimized.calls_per_min:>10.1f}회")
+    print(f"  {'Battery drain (%)':.<25} {normal.total_battery_drain:>9.3f}% {optimized.total_battery_drain:>11.3f}%")
+    print(f"  {'Battery drain per hour':.<25} {normal.battery_per_hour:>9.2f}% {optimized.battery_per_hour:>11.2f}%")
+    print(f"  {'GPS call count':.<25} {normal.total_gps_calls:>10,} {optimized.total_gps_calls:>12,}")
+    print(f"  {'GPS calls per min':.<25} {normal.calls_per_min:>9.1f} {optimized.calls_per_min:>10.1f}")
     print("=" * 60)
-    print(f"  🔋 배터리 절약률:   {saving_battery:>6.1f}%")
-    print(f"  📍 GPS 호출 감소율: {saving_calls:>6.1f}%")
+    print(f"  🔋 Battery savings rate:   {saving_battery:>6.1f}%")
+    print(f"  📍 GPS call reduction rate: {saving_calls:>6.1f}%")
     print("=" * 60)
 
-    # GPS 모드 분포
+    # GPS mode distribution
     mode_dist = {}
     for log in optimized.logs:
         mode_dist[log.gps_mode] = mode_dist.get(log.gps_mode, 0) + 1
     total = sum(mode_dist.values())
-    print("\n  [최적화 모드] GPS 모드 분포:")
+    print("\n  [Optimized Mode] GPS mode distribution:")
     for mode, cnt in sorted(mode_dist.items()):
         pct = cnt / total * 100
         bar = "█" * int(pct / 5)
         print(f"    {mode:<10} {bar:<20} {pct:5.1f}%")
 
-    # 구간별 interval 샘플
-    print("\n  [최적화 모드] interval 샘플 (처음 10개 호출):")
-    print(f"    {'시각':>8}  {'거리(m)':>8}  {'Activity':>10}  {'mode':>8}  {'interval':>10}")
+    # Interval sample per segment
+    print("\n  [Optimized Mode] interval sample (first 10 calls):")
+    print(f"    {'Time':>8}  {'Dist(m)':>8}  {'Activity':>10}  {'mode':>8}  {'interval':>10}")
     for log in optimized.logs[:10]:
         print(f"    {log.timestamp.strftime('%H:%M:%S'):>8}  "
               f"{log.distance_to_fence:>8.0f}  "
               f"{log.activity:>10}  "
               f"{log.gps_mode:>8}  "
-              f"{log.interval:>8}초")
+              f"{log.interval:>8}s")
 
     return saving_battery, saving_calls
 
 
-# ── 메인 실행 ─────────────────────────────────────────────────
+# ── Main execution ────────────────────────────────────────────
 if __name__ == "__main__":
-    random.seed(42)  # 재현 가능한 결과
+    random.seed(42)  # Reproducible results
 
-    print("경로 생성 중...")
+    print("Generating route...")
     route = generate_route()
-    print(f"총 {len(route)}개 위치 포인트 생성 ({len(route)*10//60}분 시뮬레이션)")
+    print(f"Total {len(route)} location points generated ({len(route)*10//60} min simulation)")
 
-    print("일반 모드 시뮬레이션...")
+    print("Running normal mode simulation...")
     normal = simulate_normal_mode(route)
 
-    print("최적화 모드 시뮬레이션...")
+    print("Running optimized mode simulation...")
     optimized = simulate_optimized_mode(route)
 
     saving_battery, saving_calls = print_report(normal, optimized)
 
-    # 검증 기준: 최소 40% 이상 절약되어야 함
-    assert saving_battery >= 40.0, f"배터리 절약률 기준 미달: {saving_battery:.1f}% < 40%"
-    assert saving_calls   >= 60.0, f"GPS 호출 감소율 기준 미달: {saving_calls:.1f}% < 60%"
-    print("\n✅ 검증 통과: 배터리 절약률 및 GPS 호출 감소율 기준 충족")
+    # Validation criteria: must save at least 40%
+    assert saving_battery >= 40.0, f"Battery savings below threshold: {saving_battery:.1f}% < 40%"
+    assert saving_calls   >= 60.0, f"GPS call reduction below threshold: {saving_calls:.1f}% < 60%"
+    print("\n✅ Validation passed: Battery savings and GPS call reduction meet criteria")

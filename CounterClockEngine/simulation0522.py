@@ -1,19 +1,19 @@
 """
 simulation0522.py
-카카오맵 실제 경로 기반 GPS 최적화 시뮬레이션 + 시각화
+Kakao Maps real route-based GPS optimization simulation + visualization
 
-사용법:
+Usage:
     python3 simulation0522.py
 
-입력:
-    출발지 좌표 (lat lon)
-    목적지 좌표 (lat lon)
-    약속 시간  (HH:MM)
-    이동 수단  (vehicle / walking)
+Input:
+    Origin coordinates (lat lon)
+    Destination coordinates (lat lon)
+    Appointment time  (HH:MM)
+    Transport mode  (vehicle / walking)
 
-출력:
-    전체 경로 구간별 GPS 호출 횟수·interval·배터리 (텍스트)
-    경로 지도 + 배터리 소모 시각화 (matplotlib)
+Output:
+    GPS call count, interval, and battery per route segment (text)
+    Route map + battery consumption visualization (matplotlib)
 """
 
 import os
@@ -38,17 +38,17 @@ from gps_api.core.transit_route import (
     TransitLeg, TRAFFIC_LABEL as TRANSIT_MODE_LABEL,
 )
 
-# ── 배터리 모델 ──────────────────────────────────────────────────────
+# ── Battery model ──────────────────────────────────────────────────────
 BATTERY_DRAIN_PER_SEC = {
     "HIGH":     12.0 / 3600,
     "BALANCED":  5.0 / 3600,
     "LOW":       1.5 / 3600,
 }
-NORMAL_INTERVAL_SEC = 5      # 일반 앱: 5초 고정 HIGH
-STEP_SEC = 5                 # 시뮬레이션 스텝 간격
+NORMAL_INTERVAL_SEC = 5      # Normal app: fixed 5s HIGH
+STEP_SEC = 5                 # Simulation step interval
 
 
-# ── 데이터 클래스 ─────────────────────────────────────────────────────
+# ── Data classes ──────────────────────────────────────────────────────
 
 @dataclass
 class GPSCall:
@@ -80,7 +80,7 @@ class SimResult:
         return self.n_calls / (self.total_sec / 60) if self.total_sec else 0
 
 
-# ── 경로 변환 ────────────────────────────────────────────────────────
+# ── Route conversion ──────────────────────────────────────────────────
 
 def _haversine_m(a: tuple, b: tuple) -> float:
     return haversine(a[0], a[1], b[0], b[1])
@@ -91,8 +91,8 @@ def kakao_route_to_sim(
     step_sec: int = STEP_SEC,
 ) -> list[tuple[float, float, float]]:
     """
-    resample_route 결과 [(lat, lon, phase), ...] →
-    시뮬레이션용 [(lat, lon, elapsed_sec), ...]
+    Convert resample_route result [(lat, lon, phase), ...] to
+    simulation format [(lat, lon, elapsed_sec), ...]
     """
     return [(lat, lon, i * step_sec) for i, (lat, lon, _) in enumerate(resampled)]
 
@@ -116,7 +116,7 @@ def fallback_linear_route(
     return route
 
 
-# ── 시뮬레이션 ───────────────────────────────────────────────────────
+# ── Simulation ───────────────────────────────────────────────────────
 
 def _estimate_speed(history: list[LocationPoint]) -> float | None:
     if len(history) < 2:
@@ -229,7 +229,7 @@ def run_normal(route: list[tuple], dest: tuple[float, float]) -> SimResult:
     return result
 
 
-# ── 텍스트 출력 ──────────────────────────────────────────────────────
+# ── Text output ──────────────────────────────────────────────────────
 
 def fmt_time(sec: float) -> str:
     m, s = divmod(int(sec), 60)
@@ -242,14 +242,14 @@ def _urgency_bar(urgency: float, width: int = 12) -> str:
 
 
 def print_route_table(calls: list[GPSCall]):
-    print(f"\n  {'#':>4}  {'경과':>6}  {'목적지까지':>10}  {'Activity':>10}  "
-          f"{'긴급도':>14}  {'mode':>10}  {'interval':>10}")
+    print(f"\n  {'#':>4}  {'Elapsed':>6}  {'To Dest':>10}  {'Activity':>10}  "
+          f"{'Urgency':>14}  {'mode':>10}  {'interval':>10}")
     print(f"  {'-'*4}  {'-'*6}  {'-'*10}  {'-'*10}  {'-'*14}  {'-'*10}  {'-'*10}")
 
     for i, c in enumerate(calls):
         if len(calls) > 40:
             if i == 15:
-                print(f"\n  ... (중략 {len(calls) - 25}건) ...\n")
+                print(f"\n  ... (omitted {len(calls) - 25} entries) ...\n")
             if 15 <= i < len(calls) - 10:
                 continue
 
@@ -257,7 +257,7 @@ def print_route_table(calls: list[GPSCall]):
         print(
             f"  {i+1:>4}  {fmt_time(c.elapsed_sec):>6}  {c.dist_to_dest:>9.0f}m"
             f"  {c.activity:>10}  {_urgency_bar(c.urgency)} {c.urgency:.2f}"
-            f"  {mode_sym}{c.gps_mode:<7}  {c.interval:>8}초"
+            f"  {mode_sym}{c.gps_mode:<7}  {c.interval:>8}s"
         )
 
 
@@ -268,41 +268,41 @@ def print_summary(normal: SimResult, opt: SimResult, dist_m: float, mode: str):
     dist_km = dist_m / 1000
 
     print(f"\n{'=' * 64}")
-    print(f"  시뮬레이션 요약")
+    print(f"  Simulation Summary")
     print(f"{'=' * 64}")
-    print(f"  거리: {dist_km:.2f} km  /  예상 소요: {total_min:.1f}분  /  이동수단: {mode}")
-    print(f"  {'':25}  {'일반 모드(5초)':>14}  {'최적화 모드':>12}")
+    print(f"  Distance: {dist_km:.2f} km  /  Est. Duration: {total_min:.1f} min  /  Mode: {mode}")
+    print(f"  {'':25}  {'Normal (5s)':>14}  {'Optimized':>12}")
     print(f"  {'-'*25}  {'-'*14}  {'-'*12}")
-    print(f"  {'GPS 호출 횟수':<25}  {normal.n_calls:>14,}회  {opt.n_calls:>12,}회")
-    print(f"  {'분당 GPS 호출':<25}  {normal.calls_per_min:>13.1f}회  {opt.calls_per_min:>11.1f}회")
-    print(f"  {'배터리 소모':<25}  {normal.total_battery:>13.4f}%  {opt.total_battery:>11.4f}%")
+    print(f"  {'GPS call count':<25}  {normal.n_calls:>14,}  {opt.n_calls:>12,}")
+    print(f"  {'GPS calls per min':<25}  {normal.calls_per_min:>13.1f}  {opt.calls_per_min:>11.1f}")
+    print(f"  {'Battery drain':<25}  {normal.total_battery:>13.4f}%  {opt.total_battery:>11.4f}%")
     print(f"{'=' * 64}")
-    print(f"  GPS 호출 감소: {save_calls:+.1f}%    배터리 절약: {save_bat:+.1f}%")
+    print(f"  GPS call reduction: {save_calls:+.1f}%    Battery saved: {save_bat:+.1f}%")
     print(f"{'=' * 64}")
 
     mode_cnt: dict[str, int] = {}
     for c in opt.calls:
         mode_cnt[c.gps_mode] = mode_cnt.get(c.gps_mode, 0) + 1
     total = sum(mode_cnt.values()) or 1
-    print(f"\n  [최적화] GPS 모드 분포:")
+    print(f"\n  [Optimized] GPS mode distribution:")
     for m in ["HIGH", "BALANCED", "LOW"]:
         cnt = mode_cnt.get(m, 0)
         pct = cnt / total * 100
         bar = "█" * int(pct / 4)
         desc = {
-            "HIGH":     "interval<10s  (목적지 근접 + 시간 촉박)",
-            "BALANCED": "interval 10~30s  (중간 거리)",
-            "LOW":      "interval≥30s  (여유 있음)",
+            "HIGH":     "interval<10s  (near destination + time tight)",
+            "BALANCED": "interval 10~30s  (mid-range distance)",
+            "LOW":      "interval≥30s  (plenty of time)",
         }
         print(f"    {m:<10} {bar:<25} {pct:5.1f}%  {desc.get(m,'')}")
 
-    print(f"\n  * HIGH 모드 조건: 목적지 경계 100m 이내 + ETA ≈ 남은 약속 시간")
+    print(f"\n  * HIGH mode condition: within 100m of destination boundary + ETA ≈ remaining appointment time")
 
 
-# ── 시각화 ───────────────────────────────────────────────────────────
+# ── Visualization ────────────────────────────────────────────────────
 
 MODE_COLOR = {"HIGH": "#e74c3c", "BALANCED": "#f39c12", "LOW": "#2ecc71"}
-MODE_LABEL = {"HIGH": "HIGH (빠른 갱신)", "BALANCED": "BALANCED (보통)", "LOW": "LOW (절약)"}
+MODE_LABEL = {"HIGH": "HIGH (fast update)", "BALANCED": "BALANCED (normal)", "LOW": "LOW (save)"}
 
 
 TRANSIT_COLOR = {
@@ -340,7 +340,7 @@ def visualize(
     fig.patch.set_facecolor("#1a1a2e")
     gs = gridspec.GridSpec(2, 2, figure=fig, hspace=0.38, wspace=0.32)
 
-    # ── 공통 스타일 ──
+    # ── Common style ──
     TITLE_KW = dict(color="white", fontsize=11, fontweight="bold", pad=8)
     TICK_KW  = dict(colors="#aaaaaa", labelsize=8)
 
@@ -351,12 +351,12 @@ def visualize(
         for sp in ax.spines.values():
             sp.set_edgecolor("#444466")
 
-    # ── [1] 경로 지도 ──────────────────────────────────────────────
+    # ── [1] Route map ──────────────────────────────────────────────
     ax_map = fig.add_subplot(gs[0, 0])
     _style_ax(ax_map)
-    ax_map.set_title("경로 지도 & GPS 호출 모드", **TITLE_KW)
+    ax_map.set_title("Route Map & GPS Call Mode", **TITLE_KW)
 
-    # 전체 경로 선 (대중교통은 구간별 색상)
+    # Full route line (transit: color per segment)
     if transit_legs:
         for leg in transit_legs:
             if len(leg.coords) >= 2:
@@ -371,7 +371,7 @@ def visualize(
         lons = [c[1] for c in raw_coords]
         ax_map.plot(lons, lats, color="#334466", linewidth=1.2, zorder=1)
 
-    # GPS 호출 포인트 (모드별 색상)
+    # GPS call points (color by mode)
     for gps_m in ["LOW", "BALANCED", "HIGH"]:
         pts = [(c.lon, c.lat) for c in opt.calls if c.gps_mode == gps_m]
         if pts:
@@ -379,23 +379,23 @@ def visualize(
             ax_map.scatter(xs, ys, c=MODE_COLOR[gps_m], s=18, zorder=3,
                            alpha=0.85, label=MODE_LABEL[gps_m])
 
-    # 출발·도착 마커
+    # Origin/destination markers
     ax_map.scatter([origin[1]], [origin[0]], c="#00d2ff", s=120, marker="^",
-                   zorder=5, label="출발지")
+                   zorder=5, label="Origin")
     ax_map.scatter([dest[1]], [dest[0]], c="#ff6b6b", s=120, marker="*",
-                   zorder=5, label="목적지")
+                   zorder=5, label="Destination")
 
-    ax_map.set_xlabel("경도", color="#aaaaaa", fontsize=8)
-    ax_map.set_ylabel("위도", color="#aaaaaa", fontsize=8)
+    ax_map.set_xlabel("Longitude", color="#aaaaaa", fontsize=8)
+    ax_map.set_ylabel("Latitude", color="#aaaaaa", fontsize=8)
     leg = ax_map.legend(fontsize=7, facecolor="#16213e", edgecolor="#444466",
                         labelcolor="white", loc="best")
 
-    # ── [2] 누적 배터리 소모 ───────────────────────────────────────
+    # ── [2] Cumulative battery drain ───────────────────────────────
     ax_bat = fig.add_subplot(gs[0, 1])
     _style_ax(ax_bat)
-    ax_bat.set_title("누적 배터리 소모 비교", **TITLE_KW)
+    ax_bat.set_title("Cumulative Battery Drain Comparison", **TITLE_KW)
 
-    # 최적화 모드 — 구간별 색상
+    # Optimized mode — color per segment
     prev_c = None
     for c in opt.calls:
         if prev_c is not None:
@@ -406,31 +406,31 @@ def visualize(
             )
         prev_c = c
 
-    # 일반 모드
+    # Normal mode
     n_times = [c.elapsed_sec / 60 for c in normal.calls]
     n_bats  = [c.cum_battery for c in normal.calls]
     if n_times:
         ax_bat.plot(n_times, n_bats, color="#778899", linewidth=1.2,
-                    linestyle="--", alpha=0.7, label=f"일반(5초) {normal.total_battery:.4f}%")
+                    linestyle="--", alpha=0.7, label=f"Normal(5s) {normal.total_battery:.4f}%")
 
-    # 범례용 더미 라인
+    # Dummy lines for legend
     for gps_m in ["HIGH", "BALANCED", "LOW"]:
         ax_bat.plot([], [], color=MODE_COLOR[gps_m], linewidth=2,
                     label=f"opt·{gps_m}")
 
     save_pct = (normal.total_battery - opt.total_battery) / normal.total_battery * 100
-    ax_bat.set_xlabel("경과 시간 (분)", color="#aaaaaa", fontsize=8)
-    ax_bat.set_ylabel("누적 배터리 소모 (%)", color="#aaaaaa", fontsize=8)
+    ax_bat.set_xlabel("Elapsed Time (min)", color="#aaaaaa", fontsize=8)
+    ax_bat.set_ylabel("Cumulative Battery Drain (%)", color="#aaaaaa", fontsize=8)
     ax_bat.legend(fontsize=7, facecolor="#16213e", edgecolor="#444466",
                   labelcolor="white", loc="upper left")
-    ax_bat.text(0.98, 0.05, f"절약: {save_pct:.1f}%",
+    ax_bat.text(0.98, 0.05, f"Saved: {save_pct:.1f}%",
                 transform=ax_bat.transAxes, color="#2ecc71",
                 ha="right", va="bottom", fontsize=9, fontweight="bold")
 
-    # ── [3] GPS 호출 간격 타임라인 ────────────────────────────────
+    # ── [3] GPS call interval timeline ────────────────────────────
     ax_ivl = fig.add_subplot(gs[1, 0])
     _style_ax(ax_ivl)
-    ax_ivl.set_title("GPS 호출 간격 (최적화 모드)", **TITLE_KW)
+    ax_ivl.set_title("GPS Call Interval (Optimized Mode)", **TITLE_KW)
 
     for c in opt.calls:
         ax_ivl.bar(c.elapsed_sec / 60, c.interval,
@@ -438,15 +438,15 @@ def visualize(
                    color=MODE_COLOR[c.gps_mode], alpha=0.8, align="edge")
 
     ax_ivl.axhline(NORMAL_INTERVAL_SEC, color="#778899", linewidth=1,
-                   linestyle="--", alpha=0.6, label=f"일반 고정 {NORMAL_INTERVAL_SEC}s")
-    ax_ivl.set_xlabel("경과 시간 (분)", color="#aaaaaa", fontsize=8)
-    ax_ivl.set_ylabel("interval (초)", color="#aaaaaa", fontsize=8)
+                   linestyle="--", alpha=0.6, label=f"Normal fixed {NORMAL_INTERVAL_SEC}s")
+    ax_ivl.set_xlabel("Elapsed Time (min)", color="#aaaaaa", fontsize=8)
+    ax_ivl.set_ylabel("interval (s)", color="#aaaaaa", fontsize=8)
     ax_ivl.legend(fontsize=7, facecolor="#16213e", edgecolor="#444466", labelcolor="white")
 
-    # ── [4] 긴급도 & 모드 파이 ────────────────────────────────────
+    # ── [4] Urgency & mode pie ────────────────────────────────────
     ax_pie = fig.add_subplot(gs[1, 1])
     ax_pie.set_facecolor("#16213e")
-    ax_pie.set_title("GPS 모드 분포 (최적화)", **TITLE_KW)
+    ax_pie.set_title("GPS Mode Distribution (Optimized)", **TITLE_KW)
 
     mode_cnt = {}
     for c in opt.calls:
@@ -455,7 +455,7 @@ def visualize(
     labels, sizes, colors = [], [], []
     for m in ["HIGH", "BALANCED", "LOW"]:
         if mode_cnt.get(m, 0):
-            labels.append(f"{m}\n({mode_cnt[m]}회)")
+            labels.append(f"{m}\n({mode_cnt[m]} calls)")
             sizes.append(mode_cnt[m])
             colors.append(MODE_COLOR[m])
 
@@ -470,20 +470,20 @@ def visualize(
             at.set_fontsize(8)
             at.set_color("white")
 
-    # ── 전체 제목 ──
-    appt_str = appt_time.strftime("%H:%M") if appt_time else "미지정"
+    # ── Overall title ──
+    appt_str = appt_time.strftime("%H:%M") if appt_time else "Unspecified"
     dist_km  = dist_m / 1000
     total_min = opt.total_sec / 60
     fig.suptitle(
-        f"CounterClock GPS 최적화 시뮬레이션  |  {mode}  |  "
-        f"{dist_km:.2f}km / {total_min:.0f}분  |  약속 {appt_str}",
+        f"CounterClock GPS Optimization Simulation  |  {mode}  |  "
+        f"{dist_km:.2f}km / {total_min:.0f}min  |  Appt {appt_str}",
         color="white", fontsize=12, fontweight="bold", y=0.98,
     )
 
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight",
                     facecolor=fig.get_facecolor())
-        print(f"\n  [저장] {save_path}")
+        print(f"\n  [Saved] {save_path}")
     else:
         plt.tight_layout()
         plt.show()
@@ -491,7 +491,7 @@ def visualize(
     plt.close(fig)
 
 
-# ── 입력 헬퍼 ────────────────────────────────────────────────────────
+# ── Input helpers ────────────────────────────────────────────────────
 
 def ask_coord(prompt: str) -> tuple[float, float]:
     while True:
@@ -501,13 +501,13 @@ def ask_coord(prompt: str) -> tuple[float, float]:
                 return float(raw[0]), float(raw[1])
             except ValueError:
                 pass
-        print("  형식 오류. 예) 37.4979 127.0276")
+        print("  Format error. e.g. 37.4979 127.0276")
 
 
 def ask_appt_time() -> datetime:
-    """약속 시간을 HH:MM 형식으로 입력받아 오늘 날짜 datetime 반환."""
+    """Prompt for appointment time in HH:MM format and return today's datetime."""
     while True:
-        raw = input("  약속 시간 (HH:MM, Enter=1시간 후): ").strip()
+        raw = input("  Appointment time (HH:MM, Enter=1 hour from now): ").strip()
         if not raw:
             return datetime.now() + timedelta(hours=1)
         try:
@@ -515,36 +515,36 @@ def ask_appt_time() -> datetime:
             appt = datetime.now().replace(
                 hour=t.hour, minute=t.minute, second=0, microsecond=0
             )
-            # 이미 지났으면 내일로
+            # If already passed, use tomorrow
             if appt < datetime.now():
                 appt += timedelta(days=1)
             return appt
         except ValueError:
-            print("  형식 오류. 예) 14:30")
+            print("  Format error. e.g. 14:30")
 
 
 def ask_mode() -> str:
     while True:
-        raw = input("  이동 수단 [vehicle / transit / walking] (Enter=vehicle): ").strip().lower()
+        raw = input("  Transport mode [vehicle / transit / walking] (Enter=vehicle): ").strip().lower()
         if raw in ("vehicle", "v", ""):
             return "vehicle"
-        if raw in ("transit", "t", "public", "대중교통"):
+        if raw in ("transit", "t", "public"):
             return "transit"
         if raw in ("walking", "walk", "w"):
             return "walking"
-        print("  vehicle / transit / walking 중 하나를 입력하세요.")
+        print("  Please enter one of: vehicle / transit / walking")
 
 
 def ask_save() -> str | None:
-    raw = input("  결과 이미지 저장 경로 (Enter=화면 출력): ").strip()
+    raw = input("  Result image save path (Enter=display on screen): ").strip()
     return raw if raw else None
 
 
-# ── 메인 ─────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────
 
 def main():
     print(f"\n{'#' * 64}")
-    print(f"  CounterClock GPS 최적화 시뮬레이션 (카카오맵 경로)")
+    print(f"  CounterClock GPS Optimization Simulation (Kakao Maps route)")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print(f"{'#' * 64}\n")
 
@@ -552,17 +552,17 @@ def main():
     odsay_api_key = os.getenv("ODSAY_API_KEY", "").strip()
 
     if api_key:
-        print(f"  KAKAO_API_KEY 로드 완료 ({api_key[:6]}...)")
+        print(f"  KAKAO_API_KEY loaded ({api_key[:6]}...)")
     else:
-        print("  [경고] KAKAO_API_KEY 환경변수 미설정 — 직선 보간 경로로 대체합니다.\n")
+        print("  [Warning] KAKAO_API_KEY env var not set — falling back to linear interpolation route.\n")
     if odsay_api_key:
-        print(f"  ODSAY_API_KEY  로드 완료 ({odsay_api_key[:6]}...)")
+        print(f"  ODSAY_API_KEY  loaded ({odsay_api_key[:6]}...)")
     else:
-        print("  [안내] ODSAY_API_KEY 없음 — transit 선택 시 카카오 자동차 경로(×1.8) 근사 사용")
+        print("  [Info] No ODSAY_API_KEY — transit mode will use Kakao car route (×1.8) approximation")
 
-    print("[입력]")
-    origin = ask_coord("출발지")
-    dest   = ask_coord("목적지")
+    print("[Input]")
+    origin = ask_coord("Origin")
+    dest   = ask_coord("Destination")
     appt_time = ask_appt_time()
     mode   = ask_mode()
     save_path = ask_save()
@@ -571,11 +571,11 @@ def main():
     appt_remaining_sec = (appt_time - now).total_seconds()
 
     dist_m = _haversine_m(origin, dest)
-    print(f"\n  직선 거리: {dist_m:.0f}m")
-    print(f"  약속 시간: {appt_time.strftime('%Y-%m-%d %H:%M')}  "
-          f"(지금부터 {appt_remaining_sec/60:.1f}분 후)")
+    print(f"\n  Straight-line distance: {dist_m:.0f}m")
+    print(f"  Appointment time: {appt_time.strftime('%Y-%m-%d %H:%M')}  "
+          f"({appt_remaining_sec/60:.1f} min from now)")
 
-    # ── 카카오맵 경로 호출 ──
+    # ── Kakao Maps route call ──
     raw_coords: list[tuple[float, float]] = []
     route: list[tuple[float, float, float]] = []
     transit_legs: list[TransitLeg] = []
@@ -587,82 +587,82 @@ def main():
         try:
             if mode == "transit":
                 if odsay_api_key:
-                    print("\n  ODSAY 대중교통 경로 조회 중...")
+                    print("\n  Fetching ODSAY transit route...")
                     coords, kakao_dur_sec, kakao_dist_m, transit_legs = fetch_transit_route(
                         origin[0], origin[1], dest[0], dest[1], odsay_api_key,
                     )
                     raw_coords = coords
                     leg_summary = "  ".join(
                         f"{TRANSIT_MODE_LABEL.get(l.mode, l.mode)}"
-                        f"({l.distance_m}m/{l.duration_sec//60}분)"
+                        f"({l.distance_m}m/{l.duration_sec//60}min)"
                         for l in transit_legs
                     )
-                    print(f"  → 대중교통 경로: {kakao_dist_m/1000:.2f}km / {kakao_dur_sec/60:.1f}분 / {len(transit_legs)}구간")
+                    print(f"  → Transit route: {kakao_dist_m/1000:.2f}km / {kakao_dur_sec/60:.1f}min / {len(transit_legs)} segments")
                     print(f"     {leg_summary}")
                     resampled = resample_transit_route(transit_legs, kakao_dur_sec, step_sec=STEP_SEC)
                 else:
-                    # ODSAY 키 없음 → 카카오 자동차 경로 × 1.8 근사
+                    # No ODSAY key — approximate using Kakao car route × 1.8
                     TRANSIT_TIME_FACTOR = 1.8
-                    print("\n  카카오맵 경로 조회 후 대중교통 근사 적용 중...")
+                    print("\n  Fetching Kakao Maps route and applying transit approximation...")
                     coords, car_sec, kakao_dist_m = fetch_route(
                         origin[0], origin[1], dest[0], dest[1], api_key
                     )
                     kakao_dur_sec = int(car_sec * TRANSIT_TIME_FACTOR)
                     raw_coords = coords
                     transit_legs = []
-                    print(f"  → 자동차 {car_sec/60:.1f}분 × {TRANSIT_TIME_FACTOR} = {kakao_dur_sec/60:.1f}분 (근사)")
+                    print(f"  → Car {car_sec/60:.1f}min × {TRANSIT_TIME_FACTOR} = {kakao_dur_sec/60:.1f}min (approximate)")
                     resampled = resample_route(coords, kakao_dur_sec, step_sec=STEP_SEC)
                     resampled = [(lat, lon, "TRANSIT") for lat, lon, _ in resampled]
 
                 route = kakao_route_to_sim(resampled, step_sec=STEP_SEC)
-                print(f"  → 리샘플링: {len(route)}개 시뮬레이션 포인트")
+                print(f"  → Resampled: {len(route)} simulation points")
 
             else:
-                print("\n  카카오맵 경로 조회 중...")
+                print("\n  Fetching Kakao Maps route...")
                 coords, kakao_dur_sec, kakao_dist_m = fetch_route(
                     origin[0], origin[1], dest[0], dest[1], api_key
                 )
                 raw_coords = coords
-                print(f"  → 실제 경로: {kakao_dist_m/1000:.2f}km / {kakao_dur_sec/60:.1f}분 / {len(coords)}개 좌표")
+                print(f"  → Actual route: {kakao_dist_m/1000:.2f}km / {kakao_dur_sec/60:.1f}min / {len(coords)} coordinates")
 
                 resampled = resample_route(coords, kakao_dur_sec, step_sec=STEP_SEC)
                 route = kakao_route_to_sim(resampled, step_sec=STEP_SEC)
-                print(f"  → 리샘플링: {len(route)}개 시뮬레이션 포인트")
+                print(f"  → Resampled: {len(route)} simulation points")
 
         except Exception as e:
-            print(f"  [카카오 API 오류] {e}")
-            print("  → 직선 보간 경로로 대체합니다.")
+            print(f"  [Kakao API error] {e}")
+            print("  → Falling back to linear interpolation route.")
 
     if not route:
-        print("\n  직선 보간 경로 생성 중...")
+        print("\n  Generating linear interpolation route...")
         route = fallback_linear_route(origin, dest, mode=mode)
         raw_coords = [(lat, lon) for lat, lon, _ in route]
         kakao_dist_m = dist_m
         kakao_dur_sec = route[-1][2]
-        print(f"  → {len(route)}개 포인트 ({kakao_dur_sec:.0f}초)")
+        print(f"  → {len(route)} points ({kakao_dur_sec:.0f}s)")
 
-    # 약속 시간이 예상 소요 시간보다 너무 짧으면 경고
+    # Warn if appointment time is shorter than estimated travel time
     if appt_remaining_sec < kakao_dur_sec:
-        print(f"\n  ⚠️  약속까지 {appt_remaining_sec/60:.1f}분밖에 없는데 "
-              f"예상 소요 {kakao_dur_sec/60:.1f}분입니다 — 지각 위험!")
+        print(f"\n  ⚠️  Only {appt_remaining_sec/60:.1f} min until appointment but "
+              f"estimated travel is {kakao_dur_sec/60:.1f} min — risk of being late!")
 
-    # ── 시뮬레이션 실행 ──
-    print("\n  최적화 모드 시뮬레이션 중...")
+    # ── Run simulation ──
+    print("\n  Running optimized mode simulation...")
     opt = run_optimized(route, dest, appt_remaining_sec, mode=mode)
 
-    print("  일반 모드 계산 중...")
+    print("  Calculating normal mode...")
     normal = run_normal(route, dest)
 
-    # ── 텍스트 결과 ──
+    # ── Text output ──
     print(f"\n{'=' * 64}")
-    print(f"  전체 경로 GPS 호출 상세 (최적화 모드)")
+    print(f"  Full Route GPS Call Detail (Optimized Mode)")
     print(f"{'=' * 64}")
-    print(f"  범례: [!]HIGH(빠른 갱신)  [~]BALANCED  [ ]LOW(절약)")
+    print(f"  Legend: [!]HIGH(fast update)  [~]BALANCED  [ ]LOW(save)")
     print_route_table(opt.calls)
     print_summary(normal, opt, kakao_dist_m, mode)
 
-    # ── 시각화 ──
-    print("\n  시각화 생성 중...")
+    # ── Visualization ──
+    print("\n  Generating visualization...")
     visualize(
         raw_coords=raw_coords,
         opt=opt,

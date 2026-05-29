@@ -136,7 +136,7 @@ class CounterClockEngine:
     def print_status(self, now: Optional[datetime] = None):
         statuses = self.calculate_all(now=now)
         if not statuses:
-            print("예정된 이벤트가 없습니다.")
+            print("No scheduled events.")
             return
         for s in statuses:
             print(s.summary())

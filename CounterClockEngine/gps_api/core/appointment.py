@@ -4,7 +4,7 @@ from gps_api.core.optimizer import haversine
 
 TRACKING_WINDOW_HOURS = 4
 DEFAULT_BUFFER_MIN = 10
-DEFAULT_SPEED_MPS = 1.4  # 도보 기본값
+DEFAULT_SPEED_MPS = 1.4  # Default walking speed
 
 # appointment_id -> {"destination": (lat, lon), "appointment_time": datetime}
 _store: dict[str, dict] = {}
@@ -51,7 +51,7 @@ def compute_departure(
     if time_until_appointment < 0:
         status = "late"
     elif time_until_departure < -buffer_sec:
-        # 여유 시간까지 소진 → 이미 지각 위기
+        # Buffer time exhausted → already at risk of being late
         status = "critical"
     elif time_until_departure < 0:
         status = "hurry"

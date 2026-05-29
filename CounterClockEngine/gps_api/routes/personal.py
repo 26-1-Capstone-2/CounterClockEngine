@@ -1,8 +1,8 @@
 """
 POST /api/personal/departure
-  귀가/개인 일정 기반 출발 알람 시간 계산
-  - DRIVING  → 카카오 모빌리티 길찾기 API
-  - TRANSIT  → ODsay 대중교통 API
+  Calculate departure alarm time based on commute/personal schedule
+  - DRIVING  → Kakao Mobility Directions API
+  - TRANSIT  → ODsay Public Transit API
 """
 
 import os
@@ -25,7 +25,7 @@ def _parse_datetime(value: str) -> datetime:
 @bp.post("/departure")
 def departure():
     """
-    목표 도착 시간 기준으로 출발 알람 시간과 예상 도착 시간을 반환합니다.
+    Returns the departure alarm time and estimated arrival time based on the target arrival time.
 
     Request JSON:
       {
@@ -36,7 +36,7 @@ def departure():
         "transport_type": "TRANSIT",   // TRANSIT | DRIVING
         "target_time": "2026-05-25T18:00:00",
         "is_last_mode": false,
-        "preparation_time": 10         // 분 단위
+        "preparation_time": 10         // in minutes
       }
 
     Response JSON:
@@ -76,13 +76,13 @@ def departure():
     except ValueError as e:
         abort(502, description=str(e))
     except Exception as e:
-        abort(502, description=f"경로 API 호출 실패: {e}")
+        abort(502, description=f"Route API call failed: {e}")
 
-    # 실제 출발 시각 = 목표 도착 - 이동 시간
+    # Actual departure time = target arrival - travel duration
     departure_time      = target_time - timedelta(seconds=duration_sec)
-    # 알람 시각 = 출발 시각 - 준비 시간
+    # Alarm time = departure time - preparation time
     departure_alarm_time = departure_time - timedelta(minutes=preparation_time)
-    # 예상 도착 = 출발 시각 + 이동 시간 (= target_time)
+    # Estimated arrival = departure time + travel duration (= target_time)
     estimated_arrival   = departure_time + timedelta(seconds=duration_sec)
 
     return jsonify({
@@ -99,11 +99,11 @@ def _get_duration(
     transport_type: str,
     config,
 ) -> int:
-    """경로 API를 호출해 소요 시간(초)을 반환."""
+    """Calls the route API and returns the travel duration in seconds."""
     if transport_type == "DRIVING":
         kakao_key = config.get("KAKAO_API_KEY", "")
         if not kakao_key:
-            raise ValueError("KAKAO_API_KEY가 설정되지 않았습니다.")
+            raise ValueError("KAKAO_API_KEY is not configured.")
         _, duration_sec, _ = kakao_fetch_route(
             origin_lat, origin_lng, dest_lat, dest_lng, kakao_key
         )
@@ -112,7 +112,7 @@ def _get_duration(
     # TRANSIT
     odsay_key = config.get("ODSAY_API_KEY", "")
     if not odsay_key:
-        raise ValueError("ODSAY_API_KEY가 설정되지 않았습니다.")
+        raise ValueError("ODSAY_API_KEY is not configured.")
     _, duration_sec, _, _ = fetch_transit_route(
         origin_lat, origin_lng, dest_lat, dest_lng, odsay_key
     )

@@ -1,13 +1,13 @@
 """
-그룹 약속 추적 모듈.
+Group appointment tracking module.
 
-DB 스키마 매핑:
-  Group          ↔ 약속  (약속ID, 제목, 목적지, 목표시간, 상태, 초대코드)
-  Participant    ↔ 참여자 (참여자ID, 멤버ID, 방장여부, 이동수단, 출발지, 현재위치,
-                           출발알람시각, ETA, 참여자상태, 알람스위치)
+DB schema mapping:
+  Group          ↔ Appointment  (appointment_id, title, destination, goal_time, status, invite_code)
+  Participant    ↔ Participant   (participant_id, member_id, is_host, travel_mode, origin,
+                                  current_location, departure_alarm_time, ETA, participant_status, alarm_switch)
 
-DB_BASE_URL 환경변수가 설정된 경우 외부 DB 서버와 통신하고,
-설정되지 않은 경우 인메모리 store로 동작합니다 (데모/로컬 테스트용).
+Communicates with an external DB server when the DB_BASE_URL environment variable is set;
+otherwise operates with an in-memory store (for demo/local testing).
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -26,10 +26,10 @@ ARRIVAL_RADIUS_M = 100.0
 DEFAULT_SPEED_MPS = 1.4
 MAX_WORKERS = 5
 
-# DB 클라이언트 (init_db()로 설정)
+# DB client (set via init_db())
 _db: Optional[DBClient] = None
 
-# 인메모리 fallback store
+# In-memory fallback store
 _store: dict[str, "Group"] = {}
 
 
@@ -39,51 +39,51 @@ def init_db(client: DBClient) -> None:
 
 
 # ------------------------------------------------------------------
-# 데이터 모델 (DB 스키마와 1:1 대응)
+# Data model (1:1 mapping with DB schema)
 # ------------------------------------------------------------------
 
 @dataclass
 class Participant:
     participant_id: str
-    member_id: str           # 멤버 ID FK
+    member_id: str           # Member ID FK
     name: str
-    is_host: bool = False    # 방장 여부
-    travel_mode: str = "transit"  # 이동 수단: walking | transit | vehicle
+    is_host: bool = False    # Host flag
+    travel_mode: str = "transit"  # Travel mode: walking | transit | vehicle
 
-    # 출발지
+    # Origin
     origin_lat: Optional[float] = None
     origin_lon: Optional[float] = None
     origin_name: Optional[str] = None
     origin_address: Optional[str] = None
 
-    # 현재 위도/경도 (GPS 업데이트마다 갱신)
+    # Current latitude/longitude (updated on each GPS update)
     current_lat: Optional[float] = None
     current_lon: Optional[float] = None
 
-    # 계산 결과 (ETA 재계산마다 갱신 → DB에 write-back)
+    # Computed results (updated on each ETA recalculation → written back to DB)
     eta_sec: Optional[float] = None
     distance_m: Optional[float] = None
-    alarm_time: Optional[str] = None   # 출발 알람 시각 (ISO 8601)
-    alarm_enabled: bool = True         # 참가자 알람 스위치
-    status: str = "unknown"            # 참여자 상태
+    alarm_time: Optional[str] = None   # Departure alarm time (ISO 8601)
+    alarm_enabled: bool = True         # Participant alarm switch
+    status: str = "unknown"            # Participant status
     last_updated: Optional[str] = None
 
 
 @dataclass
 class Group:
-    group_id: str                      # 약속 ID
-    title: str                         # 약속 제목
-    destination: tuple[float, float]   # (목적지 위도, 목적지 경도)
-    appointment_time: datetime         # 목표 시간
+    group_id: str                      # Appointment ID
+    title: str                         # Appointment title
+    destination: tuple[float, float]   # (destination latitude, destination longitude)
+    appointment_time: datetime         # Goal time
     destination_name: Optional[str] = None
     destination_address: Optional[str] = None
-    status: str = "active"             # 약속 상태
-    invite_code: Optional[str] = None  # 초대 코드
+    status: str = "active"             # Appointment status
+    invite_code: Optional[str] = None  # Invite code
     participants: dict[str, Participant] = field(default_factory=dict)
 
 
 # ------------------------------------------------------------------
-# 인메모리 CRUD (DB 미연결 시 사용)
+# In-memory CRUD (used when DB is not connected)
 # ------------------------------------------------------------------
 
 def create_group(
@@ -100,7 +100,7 @@ def create_group(
         appointment_time=appointment_time,
         destination_name=destination_name,
         destination_address=destination_address,
-        invite_code=str(uuid4())[:8].upper(),  # 8자리 초대 코드
+        invite_code=str(uuid4())[:8].upper(),  # 8-character invite code
     )
     _store[group.group_id] = group
     return group
@@ -143,7 +143,7 @@ def join_group(
         origin_lon=origin_lon,
         origin_name=origin_name,
         origin_address=origin_address,
-        # 출발지가 곧 현재 위치의 초기값
+        # Origin is also the initial current location
         current_lat=origin_lat,
         current_lon=origin_lon,
     )
@@ -156,7 +156,7 @@ def join_group(
 
 def leave_group(group_id: str, member_id: str) -> bool:
     if _db:
-        return False  # DB 서버 측에서 처리
+        return False  # Handled on the DB server side
     group = _store.get(group_id)
     if not group or member_id not in group.participants:
         return False
@@ -165,7 +165,7 @@ def leave_group(group_id: str, member_id: str) -> bool:
 
 
 # ------------------------------------------------------------------
-# ETA 계산
+# ETA calculation
 # ------------------------------------------------------------------
 
 def _compute_status(eta_sec: float, distance_m: float, appointment_time: datetime) -> str:
@@ -186,10 +186,10 @@ def _compute_status(eta_sec: float, distance_m: float, appointment_time: datetim
 
 def _get_buffer_minutes(member_id: str) -> float:
     """
-    버퍼 우선순위:
-      1순위: 캐시된 멤버 설정의 '여유 시간' (DB Webhook으로 Push된 값)
-      2순위: DB 멤버 설정 직접 조회 (캐시 미스 fallback)
-      3순위: 과거 지각 기록 기반 계산값 (recommended_buffer)
+    Buffer priority:
+      1st: Cached member settings 'buffer time' (value pushed via DB Webhook)
+      2nd: DB member settings direct query (fallback on cache miss)
+      3rd: Computed value based on past lateness records (recommended_buffer)
     """
     settings = _cache.get_member_settings(member_id)
     if settings is None and _db:
@@ -200,7 +200,7 @@ def _get_buffer_minutes(member_id: str) -> float:
 
 
 def _compute_alarm_time(eta_sec: float, appointment_time: datetime, member_id: str) -> str:
-    """출발 알람 시각 = 약속 시간 - ETA - 개인 버퍼 (멤버 설정 우선)"""
+    """Departure alarm time = appointment time - ETA - personal buffer (member settings take priority)"""
     buffer_sec = _get_buffer_minutes(member_id) * 60
     alarm_dt = appointment_time - timedelta(seconds=eta_sec + buffer_sec)
     return alarm_dt.isoformat()
@@ -212,7 +212,7 @@ def _fetch_eta(
     appointment_time: datetime,
     kakao_api_key: str,
 ) -> None:
-    """참여자 1명의 ETA를 계산해 participant 객체를 직접 갱신한다."""
+    """Compute ETA for one participant and update the participant object in-place."""
     lat, lon = participant.current_lat, participant.current_lon
     dest_lat, dest_lon = destination
 
@@ -239,7 +239,7 @@ def compute_gps_interval(
     destination: tuple[float, float],
     appointment_time: Optional[datetime] = None,
 ) -> dict:
-    """참여자의 현재 위치·ETA를 바탕으로 다음 GPS 갱신 주기와 모드를 계산한다."""
+    """Calculate the next GPS update interval and mode based on the participant's current location and ETA."""
     dest_lat, dest_lon = destination
     history = []
     if participant.current_lat is not None:
@@ -297,12 +297,12 @@ def update_location(
     kakao_api_key: str = "",
 ) -> Optional[tuple[dict, dict[str, dict]]]:
     """
-    참여자의 현재 위치를 업데이트하고 전체 그룹 ETA를 재계산한다.
-    DB 연결 시 계산 결과를 DB에 write-back한다.
+    Update a participant's current location and recalculate ETA for the entire group.
+    When connected to DB, writes calculation results back to DB.
 
     Returns:
       (group_summary, gps_intervals)
-        group_summary  — 그룹 전체 ETA 현황 dict
+        group_summary  — dict of overall group ETA status
         gps_intervals  — { member_id: {"next_interval_sec": int, "gps_mode": str}, ... }
     """
     if _db:
@@ -345,7 +345,7 @@ def _update_location_db(
     raw_participants = cached_parts if cached_parts is not None else _db.get_participants(group_id)
     participants = [_participant_from_db(p) for p in raw_participants]
 
-    # 현재 참여자 위치 반영
+    # Apply current participant location
     target = next((p for p in participants if p.member_id == member_id), None)
     if not target:
         return None
@@ -355,9 +355,9 @@ def _update_location_db(
     group = _appointment_to_group(raw_appt)
     _run_parallel_eta(participants, group.destination, group.appointment_time, kakao_api_key)
 
-    # 계산 결과를 DB에 write-back
+    # Write calculation results back to DB
     for p in participants:
-        if p.last_updated:  # ETA가 계산된 참여자만
+        if p.last_updated:  # Only participants whose ETA has been computed
             _db.update_participant(
                 p.participant_id,
                 current_lat=p.current_lat,
@@ -413,7 +413,7 @@ def _record_arrival(
     appointment_time: datetime,
     arrived_iso: str,
 ) -> None:
-    """도착 처리 시 지각 기록을 자동으로 저장한다. 실패해도 도착 처리는 계속된다."""
+    """Automatically saves a lateness record when arrival is processed. Arrival processing continues even if this fails."""
     from gps_api.core.latency import save_record, ArrivalRecord
     try:
         save_record(ArrivalRecord(
@@ -428,10 +428,10 @@ def _record_arrival(
 
 
 # ------------------------------------------------------------------
-# 지오펜스 이탈 처리 (DB 서버 Push → 이동 시작 감지)
+# Geofence exit handling (DB server push → departure detection)
 # ------------------------------------------------------------------
 
-# 지오펜스 이탈 직후 부여하는 초기 GPS 갱신 주기 (BALANCED 모드)
+# Initial GPS update interval assigned immediately after geofence exit (BALANCED mode)
 _GEOFENCE_EXIT_INTERVAL = {"next_interval_sec": 10, "gps_mode": "BALANCED"}
 
 
@@ -443,31 +443,31 @@ def handle_geofence_exit(
     kakao_api_key: str = "",
 ) -> Optional[tuple[dict, dict]]:
     """
-    DB 서버가 참가자의 출발지 500m 지오펜스 이탈을 감지했을 때 호출된다.
+    Called when the DB server detects a participant has exited the 500m origin geofence.
 
-    처리 순서:
-      1. 참가자 현재 위치를 이탈 지점 좌표로 업데이트
-      2. 전체 그룹 ETA 재계산 (이탈자 포함)
-      3. 이탈한 참가자의 GPS 주기를 BALANCED(10초)로 즉시 설정
+    Processing order:
+      1. Update the participant's current location to the exit point coordinates
+      2. Recalculate ETA for the entire group (including the exiting participant)
+      3. Immediately set the exiting participant's GPS interval to BALANCED (10 seconds)
       4. DB write-back
 
     Returns:
       (group_summary, gps_intervals)
-        gps_intervals[member_id] 는 항상 BALANCED(10초) — 이동 시작 직후
-        나머지 참가자는 Adaptive Interval 계산값
+        gps_intervals[member_id] is always BALANCED (10s) — right after movement starts
+        Other participants use Adaptive Interval calculated values
     """
     result = update_location(appointment_id, member_id, lat, lon, kakao_api_key)
     if result is None:
         return None
 
     summary, intervals = result
-    # 이탈한 참가자는 이동 시작 직후이므로 짧은 주기로 강제 설정
+    # Force short interval for the exiting participant since movement just started
     intervals[member_id] = _GEOFENCE_EXIT_INTERVAL
     return summary, intervals
 
 
 # ------------------------------------------------------------------
-# DB 응답 → 내부 모델 변환
+# DB response → internal model conversion
 # ------------------------------------------------------------------
 
 def _appointment_to_group(raw: dict) -> Group:
@@ -504,7 +504,7 @@ def _participant_from_db(raw: dict) -> Participant:
 
 
 # ------------------------------------------------------------------
-# 직렬화
+# Serialization
 # ------------------------------------------------------------------
 
 def get_group_summary(group: Group) -> dict:

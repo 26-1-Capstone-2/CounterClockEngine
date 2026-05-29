@@ -1,9 +1,9 @@
 """
-ETA Tracker — Gradient Descent 기반 실시간 위치 추적 및 ETA 갱신 시스템
+ETA Tracker — Real-time location tracking and ETA update system based on Gradient Descent
 
-Loss function  : 현재 위치 → 목적지 거리  d(t)
-Gradient       : d(t) - d(t-1)  (거리 변화율)
-목표           : Loss(거리)를 최소화하는 방향으로 ETA 갱신 전략 결정
+Loss function  : Current location → destination distance  d(t)
+Gradient       : d(t) - d(t-1)  (rate of distance change)
+Goal           : Determine ETA update strategy in the direction that minimizes Loss (distance)
 """
 
 import math
@@ -14,18 +14,18 @@ import math
 # ─────────────────────────────────────────────────────────────
 
 def haversine(loc1: tuple, loc2: tuple) -> float:
-    """두 GPS 좌표 사이의 실제 거리를 미터 단위로 반환한다.
+    """Returns the actual distance in meters between two GPS coordinates.
 
-    Haversine 공식을 사용하여 지구 곡률을 반영한 거리를 계산한다.
+    Calculates distance accounting for Earth's curvature using the Haversine formula.
 
     Args:
-        loc1: (위도, 경도) 튜플 — 출발점
-        loc2: (위도, 경도) 튜플 — 도착점
+        loc1: (latitude, longitude) tuple — departure point
+        loc2: (latitude, longitude) tuple — arrival point
 
     Returns:
-        두 좌표 사이의 거리 (미터)
+        Distance between the two coordinates (meters)
     """
-    R = 6_371_000  # 지구 반지름 (m)
+    R = 6_371_000  # Earth radius (m)
     lat1, lon1 = math.radians(loc1[0]), math.radians(loc1[1])
     lat2, lon2 = math.radians(loc2[0]), math.radians(loc2[1])
 
@@ -36,15 +36,15 @@ def haversine(loc1: tuple, loc2: tuple) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 
-# 단위 테스트
+# Unit test
 _d = haversine((37.5665, 126.9780), (37.5665, 126.9780))
-assert abs(_d) < 1e-6, "동일 좌표는 0m여야 한다"
+assert abs(_d) < 1e-6, "Same coordinates should be 0m"
 
 _d = haversine((0.0, 0.0), (0.0, 1.0))
-assert 111_000 < _d < 112_000, f"경도 1도 ≈ 111km, 실제: {_d:.0f}m"
+assert 111_000 < _d < 112_000, f"1 degree longitude ≈ 111km, actual: {_d:.0f}m"
 
-print(f"[haversine] 서울시청 → 서울시청    : {haversine((37.5665, 126.9780), (37.5665, 126.9780)):.1f}m")
-print(f"[haversine] 강남역  → 삼성역        : {haversine((37.4979, 127.0276), (37.5088, 127.0632)):.0f}m")
+print(f"[haversine] Seoul City Hall → Seoul City Hall    : {haversine((37.5665, 126.9780), (37.5665, 126.9780)):.1f}m")
+print(f"[haversine] Gangnam Station → Samsung Station    : {haversine((37.4979, 127.0276), (37.5088, 127.0632)):.0f}m")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -52,37 +52,37 @@ print(f"[haversine] 강남역  → 삼성역        : {haversine((37.4979, 127.0
 # ─────────────────────────────────────────────────────────────
 
 def compute_gradient(prev_loc: tuple, curr_loc: tuple, destination: tuple) -> float:
-    """현재 스텝의 거리 변화율(gradient)을 계산한다.
+    """Calculates the rate of distance change (gradient) for the current step.
 
     gradient = d(t) - d(t-1)
-      - 양수 : 목적지에서 멀어지는 중  (Loss 증가)
-      - 음수 : 목적지에 가까워지는 중  (Loss 감소)
-      - 0 근처: 정지 상태
+      - Positive: moving away from destination  (Loss increasing)
+      - Negative: approaching destination  (Loss decreasing)
+      - Near 0: stationary
 
     Args:
-        prev_loc    : 이전 위치 (위도, 경도)
-        curr_loc    : 현재 위치 (위도, 경도)
-        destination : 목적지   (위도, 경도)
+        prev_loc    : Previous location (latitude, longitude)
+        curr_loc    : Current location (latitude, longitude)
+        destination : Destination   (latitude, longitude)
 
     Returns:
-        gradient 값 (미터)
+        gradient value (meters)
     """
     d_prev = haversine(prev_loc, destination)
     d_curr = haversine(curr_loc, destination)
     return d_curr - d_prev
 
 
-# 단위 테스트
-# 강남역(출발) → 삼성역(중간) → 삼성역(목적지) 방향으로 이동
-_dest = (37.5088, 127.0632)   # 삼성역
+# Unit test
+# Direction: Gangnam Station (start) → Samsung Station (mid) → Samsung Station (destination)
+_dest = (37.5088, 127.0632)   # Samsung Station
 _g_closer  = compute_gradient((37.4979, 127.0276), (37.5020, 127.0400), _dest)
 _g_farther = compute_gradient((37.5020, 127.0400), (37.4900, 127.0100), _dest)
 
-assert _g_closer  < 0, "목적지에 다가가면 gradient < 0"
-assert _g_farther > 0, "목적지에서 멀어지면 gradient > 0"
+assert _g_closer  < 0, "Approaching destination should give gradient < 0"
+assert _g_farther > 0, "Moving away from destination should give gradient > 0"
 
-print(f"\n[compute_gradient] 가까워지는 중 : {_g_closer:.2f}m")
-print(f"[compute_gradient] 멀어지는 중   : {_g_farther:.2f}m")
+print(f"\n[compute_gradient] Approaching : {_g_closer:.2f}m")
+print(f"[compute_gradient] Moving away  : {_g_farther:.2f}m")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -90,38 +90,38 @@ print(f"[compute_gradient] 멀어지는 중   : {_g_farther:.2f}m")
 # ─────────────────────────────────────────────────────────────
 
 def update_with_momentum(gradient: float, velocity: float, momentum: float = 0.9) -> float:
-    """모멘텀을 적용하여 이동 추세(관성)를 반영한 velocity를 갱신한다.
+    """Updates velocity reflecting movement trend (inertia) by applying momentum.
 
     velocity = momentum * velocity + (1 - momentum) * gradient
 
-      - velocity 양수 지속 → 멀어지는 추세
-      - velocity 음수 지속 → 가까워지는 추세
-      - 부호 전환           → 방향 전환 감지
+      - Sustained positive velocity → trend of moving away
+      - Sustained negative velocity → trend of approaching
+      - Sign change               → direction change detected
 
     Args:
-        gradient : 현재 스텝의 거리 변화율
-        velocity : 이전 velocity (초기값 0.0)
-        momentum : 관성 계수 (기본 0.9)
+        gradient : Rate of distance change for current step
+        velocity : Previous velocity (initial value 0.0)
+        momentum : Inertia coefficient (default 0.9)
 
     Returns:
-        갱신된 velocity 값
+        Updated velocity value
     """
     return momentum * velocity + (1 - momentum) * gradient
 
 
-# 단위 테스트
+# Unit test
 _v = 0.0
-for _g in [-100, -80, -70]:   # 지속 접근 → velocity 점점 음수
+for _g in [-100, -80, -70]:   # Sustained approach → velocity becomes increasingly negative
     _v = update_with_momentum(_g, _v)
-assert _v < 0, "지속 접근 시 velocity < 0이어야 한다"
+assert _v < 0, "Sustained approach should give velocity < 0"
 
 _v2 = 0.0
-for _g in [100, 120, 110]:    # 지속 이탈 → velocity 점점 양수
+for _g in [100, 120, 110]:    # Sustained departure → velocity becomes increasingly positive
     _v2 = update_with_momentum(_g, _v2)
-assert _v2 > 0, "지속 이탈 시 velocity > 0이어야 한다"
+assert _v2 > 0, "Sustained departure should give velocity > 0"
 
-print(f"\n[update_with_momentum] 지속 접근 후 velocity : {_v:.2f}")
-print(f"[update_with_momentum] 지속 이탈 후 velocity : {_v2:.2f}")
+print(f"\n[update_with_momentum] velocity after sustained approach : {_v:.2f}")
+print(f"[update_with_momentum] velocity after sustained departure : {_v2:.2f}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -129,32 +129,32 @@ print(f"[update_with_momentum] 지속 이탈 후 velocity : {_v2:.2f}")
 # ─────────────────────────────────────────────────────────────
 
 def adaptive_update_interval(gradient: float, base_interval: float = 60.0) -> float:
-    """gradient 크기에 따라 위치 갱신 주기를 동적으로 조정한다.
+    """Dynamically adjusts the location update interval based on gradient magnitude.
 
     urgency  = |gradient| / 100
     interval = base_interval / (1 + urgency)
-    최솟값 10초 보장
+    Minimum guaranteed 10 seconds
 
-    gradient가 클수록(급격한 변화) → 간격 짧아짐 (Adaptive Learning Rate와 동일 원리)
-    gradient가 작을수록(정체 상태) → 간격 길어짐
+    Larger gradient (rapid change) → shorter interval (same principle as Adaptive Learning Rate)
+    Smaller gradient (stalled state) → longer interval
 
     Args:
-        gradient      : 현재 거리 변화율 (미터)
-        base_interval : 기본 갱신 주기 (초, 기본 60s)
+        gradient      : Current rate of distance change (meters)
+        base_interval : Base update interval (seconds, default 60s)
 
     Returns:
-        조정된 갱신 주기 (초), 최소 10초
+        Adjusted update interval (seconds), minimum 10 seconds
     """
     urgency = abs(gradient) / 100.0
     interval = base_interval / (1.0 + urgency)
     return max(10.0, interval)
 
 
-# 단위 테스트
-assert adaptive_update_interval(0)     == 60.0,  "gradient=0이면 base_interval 그대로"
+# Unit test
+assert adaptive_update_interval(0)     == 60.0,  "gradient=0 should keep base_interval"
 assert adaptive_update_interval(100)   == 30.0,  "urgency=1 → 60/2=30s"
-assert adaptive_update_interval(10000) == 10.0,  "매우 큰 gradient → 최소 10s"
-assert adaptive_update_interval(-200)  == 20.0,  "음수 gradient도 절댓값 사용"
+assert adaptive_update_interval(10000) == 10.0,  "very large gradient → minimum 10s"
+assert adaptive_update_interval(-200)  == 20.0,  "negative gradient uses absolute value"
 
 print(f"\n[adaptive_update_interval] gradient=0    : {adaptive_update_interval(0):.1f}s")
 print(f"[adaptive_update_interval] gradient=100  : {adaptive_update_interval(100):.1f}s")
@@ -173,28 +173,28 @@ def handle_movement(
     velocity: float,
     threshold: float = 50.0,
 ) -> dict:
-    """이동 상태를 분석하고 ETA 갱신 전략을 결정한다.
+    """Analyzes movement state and determines the ETA update strategy.
 
-    내부적으로 compute_gradient → update_with_momentum → adaptive_update_interval
-    순서로 호출하며, gradient 크기에 따라 세 가지 액션 중 하나를 반환한다.
+    Internally calls compute_gradient → update_with_momentum → adaptive_update_interval
+    in order, and returns one of three actions based on gradient magnitude.
 
-      gradient >  threshold : 즉시 ETA 재계산 + 경고 메시지
-      gradient < -threshold : ETA 앞당김    + 긍정 메시지
-      그 외                 : 기존 ETA 유지
+      gradient >  threshold : Immediately recalculate ETA + warning message
+      gradient < -threshold : Advance ETA    + positive message
+      Otherwise             : Maintain existing ETA
 
     Args:
-        prev_loc    : 이전 위치 (위도, 경도)
-        curr_loc    : 현재 위치 (위도, 경도)
-        destination : 목적지   (위도, 경도)
-        velocity    : 이전 velocity (초기값 0.0)
-        threshold   : 액션 분기 임계값 (미터, 기본 50m)
+        prev_loc    : Previous location (latitude, longitude)
+        curr_loc    : Current location (latitude, longitude)
+        destination : Destination   (latitude, longitude)
+        velocity    : Previous velocity (initial value 0.0)
+        threshold   : Action branching threshold (meters, default 50m)
 
     Returns:
         {
             "action"        : "recalculate" | "advance_eta" | "maintain",
             "message"       : str,
-            "next_interval" : float,   # 다음 갱신까지 대기 시간 (초)
-            "velocity"      : float,   # 갱신된 velocity
+            "next_interval" : float,   # Wait time until next update (seconds)
+            "velocity"      : float,   # Updated velocity
         }
     """
     gradient      = compute_gradient(prev_loc, curr_loc, destination)
@@ -204,20 +204,20 @@ def handle_movement(
     if gradient > threshold:
         action  = "recalculate"
         message = (
-            f"경고: 목적지에서 {gradient:.0f}m 멀어졌습니다. "
-            f"ETA를 즉시 재계산합니다. (velocity={new_velocity:.1f})"
+            f"Warning: moved {gradient:.0f}m farther from destination. "
+            f"Recalculating ETA immediately. (velocity={new_velocity:.1f})"
         )
     elif gradient < -threshold:
         action  = "advance_eta"
         message = (
-            f"좋아요! 목적지에 {abs(gradient):.0f}m 더 가까워졌습니다. "
-            f"ETA를 앞당깁니다. (velocity={new_velocity:.1f})"
+            f"Great! {abs(gradient):.0f}m closer to destination. "
+            f"Advancing ETA. (velocity={new_velocity:.1f})"
         )
     else:
         action  = "maintain"
         message = (
-            f"이동 변화 미미 (gradient={gradient:.1f}m). "
-            f"기존 ETA를 유지합니다. (velocity={new_velocity:.1f})"
+            f"Minor movement change (gradient={gradient:.1f}m). "
+            f"Maintaining existing ETA. (velocity={new_velocity:.1f})"
         )
 
     return {
@@ -228,23 +228,23 @@ def handle_movement(
     }
 
 
-# 단위 테스트
+# Unit test
 _dest = (37.5088, 127.0632)
 _r1 = handle_movement(
     (37.4979, 127.0276), (37.4900, 127.0100), _dest, velocity=0.0
 )
-assert _r1["action"] == "recalculate", "멀어지면 recalculate"
+assert _r1["action"] == "recalculate", "Moving away should recalculate"
 
 _r2 = handle_movement(
     (37.4979, 127.0276), (37.5050, 127.0500), _dest, velocity=0.0
 )
-assert _r2["action"] == "advance_eta", "가까워지면 advance_eta"
+assert _r2["action"] == "advance_eta", "Approaching should advance_eta"
 
-print(f"\n[handle_movement] 멀어지는 케이스 → action: {_r1['action']}")
+print(f"\n[handle_movement] Moving away case → action: {_r1['action']}")
 print(f"  {_r1['message']}")
 print(f"  next_interval={_r1['next_interval']:.1f}s, velocity={_r1['velocity']:.2f}")
 
-print(f"\n[handle_movement] 가까워지는 케이스 → action: {_r2['action']}")
+print(f"\n[handle_movement] Approaching case → action: {_r2['action']}")
 print(f"  {_r2['message']}")
 print(f"  next_interval={_r2['next_interval']:.1f}s, velocity={_r2['velocity']:.2f}")
 
@@ -254,58 +254,58 @@ print(f"  next_interval={_r2['next_interval']:.1f}s, velocity={_r2['velocity']:.
 # ─────────────────────────────────────────────────────────────
 
 def calculate_eta(current_loc: tuple, destination: tuple, speed_mps: float = 1.4) -> float:
-    """현재 위치에서 목적지까지의 ETA(초)를 계산한다.
+    """Calculates the ETA (seconds) from current location to destination.
 
-    ETA = 거리(m) / 속도(m/s)
-    기본 속도 1.4 m/s는 도보 평균 속도 기준이다.
+    ETA = distance(m) / speed(m/s)
+    Default speed of 1.4 m/s is based on average walking speed.
 
     Args:
-        current_loc : 현재 위치 (위도, 경도)
-        destination : 목적지   (위도, 경도)
-        speed_mps   : 이동 속도 (m/s, 기본 1.4m/s)
+        current_loc : Current location (latitude, longitude)
+        destination : Destination   (latitude, longitude)
+        speed_mps   : Movement speed (m/s, default 1.4m/s)
 
     Returns:
-        예상 도착 시간 (초)
+        Estimated arrival time (seconds)
     """
     distance = haversine(current_loc, destination)
     return distance / speed_mps
 
 
-# 단위 테스트
+# Unit test
 _eta = calculate_eta((37.4979, 127.0276), (37.4979, 127.0276))
-assert abs(_eta) < 1e-6, "동일 위치 ETA는 0이어야 한다"
+assert abs(_eta) < 1e-6, "ETA at same location should be 0"
 
 _eta2 = calculate_eta((37.4979, 127.0276), (37.5088, 127.0632))
-assert _eta2 > 0, "다른 위치 ETA는 양수여야 한다"
+assert _eta2 > 0, "ETA to different location should be positive"
 
-print(f"\n[calculate_eta] 강남역 → 삼성역 (도보 1.4m/s) : {_eta2:.0f}초 ({_eta2/60:.1f}분)")
+print(f"\n[calculate_eta] Gangnam Station → Samsung Station (walking 1.4m/s) : {_eta2:.0f}s ({_eta2/60:.1f}min)")
 
 
 # ─────────────────────────────────────────────────────────────
-# 전체 시뮬레이션
+# Full simulation
 # ─────────────────────────────────────────────────────────────
 
 def run_simulation():
-    """A → B 경로 시뮬레이션 (멀어지는 케이스 + 가까워지는 케이스)."""
+    """A → B route simulation (moving away case + approaching case)."""
 
     print("\n" + "=" * 65)
-    print("  ETA Tracker - Gradient Descent 기반 실시간 추적 시뮬레이션")
+    print("  ETA Tracker - Real-time Tracking Simulation based on Gradient Descent")
     print("=" * 65)
 
-    destination = (37.5088, 127.0632)   # 삼성역 (목적지)
-    print(f"  목적지: 삼성역 {destination}")
+    destination = (37.5088, 127.0632)   # Samsung Station (destination)
+    print(f"  Destination: Samsung Station {destination}")
 
-    # ── 케이스 1: 올바른 방향으로 이동 (가까워지는 케이스) ───────────
+    # ── Case 1: Moving in correct direction (approaching case) ──────────
     print("\n" + "-" * 65)
-    print("  [케이스 1] 강남역 출발 → 삼성역 방향으로 접근")
+    print("  [Case 1] Departing from Gangnam Station → approaching Samsung Station")
     print("-" * 65)
 
     waypoints_approach = [
-        (37.4979, 127.0276),   # 강남역 (출발)
+        (37.4979, 127.0276),   # Gangnam Station (start)
         (37.5010, 127.0350),
         (37.5035, 127.0450),
         (37.5060, 127.0540),
-        (37.5088, 127.0632),   # 삼성역 (도착)
+        (37.5088, 127.0632),   # Samsung Station (arrival)
     ]
 
     velocity = 0.0
@@ -316,24 +316,24 @@ def run_simulation():
         velocity = result["velocity"]
         eta_sec  = calculate_eta(curr, destination)
         print(
-            f"  스텝 {i}  위치={curr}  "
-            f"ETA={eta_sec:.0f}s({eta_sec/60:.1f}분)  "
+            f"  Step {i}  pos={curr}  "
+            f"ETA={eta_sec:.0f}s({eta_sec/60:.1f}min)  "
             f"action={result['action']}  interval={result['next_interval']:.1f}s"
         )
         print(f"         {result['message']}")
 
-    # ── 케이스 2: 잘못된 방향으로 이탈 후 방향 전환 (멀어지는 케이스) ──
+    # ── Case 2: Detouring in wrong direction then turning back (moving away case) ──
     print("\n" + "-" * 65)
-    print("  [케이스 2] 출발 후 반대 방향으로 이탈 → 방향 전환")
+    print("  [Case 2] Detour in wrong direction → turn around")
     print("-" * 65)
 
     waypoints_detour = [
-        (37.5010, 127.0350),   # 출발
-        (37.4970, 127.0200),   # 반대 방향 이탈 1
-        (37.4940, 127.0100),   # 반대 방향 이탈 2
-        (37.4980, 127.0300),   # 방향 전환 시작
-        (37.5040, 127.0480),   # 다시 접근
-        (37.5088, 127.0632),   # 목적지 도착
+        (37.5010, 127.0350),   # Start
+        (37.4970, 127.0200),   # Detour in wrong direction 1
+        (37.4940, 127.0100),   # Detour in wrong direction 2
+        (37.4980, 127.0300),   # Start turning around
+        (37.5040, 127.0480),   # Approaching again
+        (37.5088, 127.0632),   # Arrive at destination
     ]
 
     velocity = 0.0
@@ -344,14 +344,14 @@ def run_simulation():
         velocity = result["velocity"]
         eta_sec  = calculate_eta(curr, destination)
         print(
-            f"  스텝 {i}  위치={curr}  "
-            f"ETA={eta_sec:.0f}s({eta_sec/60:.1f}분)  "
+            f"  Step {i}  pos={curr}  "
+            f"ETA={eta_sec:.0f}s({eta_sec/60:.1f}min)  "
             f"action={result['action']}  interval={result['next_interval']:.1f}s"
         )
         print(f"         {result['message']}")
 
     print("\n" + "=" * 65)
-    print("  시뮬레이션 완료")
+    print("  Simulation complete")
     print("=" * 65)
 
 

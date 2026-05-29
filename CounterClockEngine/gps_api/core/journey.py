@@ -1,16 +1,16 @@
 """
-개인 여정(여정) 추적 모듈.
+Personal journey tracking module.
 
-여정 = 1인 이동 추적 (그룹 약속과 별개)
+Journey = single-person travel tracking (separate from group appointments)
 
-DB 스키마 매핑:
-  Journey ↔ 여정 (여정ID, 멤버ID, 이동수단, 출발지, 목적지,
-                   현재위치, 목표시간, ETA, 출발알람, 막차여부,
-                   반복요일, 여정상태, 알람스위치)
+DB schema mapping:
+  Journey ↔ Journey (journey_id, member_id, travel_mode, origin, destination,
+                      current_location, goal_time, ETA, departure_alarm, last_train_flag,
+                      repeat_days, journey_status, alarm_switch)
 
-버퍼 우선순위:
-  1순위: DB 멤버 설정의 '여유 시간'
-  2순위: latency.py의 과거 지각 기록 기반 계산값
+Buffer priority:
+  1st: DB member settings 'buffer time'
+  2nd: Computed value based on past lateness records in latency.py
 """
 
 from dataclasses import dataclass
@@ -35,7 +35,7 @@ def init_db(client: DBClient) -> None:
 
 
 # ------------------------------------------------------------------
-# 데이터 모델 (DB 스키마와 1:1 대응)
+# Data model (1:1 mapping with DB schema)
 # ------------------------------------------------------------------
 
 @dataclass
@@ -43,49 +43,49 @@ class Journey:
     journey_id: str
     member_id: str
     title: str
-    journey_type: str = "one_way"   # 여정 타입
+    journey_type: str = "one_way"   # Journey type
 
-    # 출발지
+    # Origin
     origin_lat: Optional[float] = None
     origin_lon: Optional[float] = None
     origin_name: Optional[str] = None
     origin_address: Optional[str] = None
 
-    # 목적지
+    # Destination
     dest_lat: Optional[float] = None
     dest_lon: Optional[float] = None
     dest_name: Optional[str] = None
     dest_address: Optional[str] = None
 
-    # 현재 위치 (GPS 업데이트마다 갱신)
+    # Current location (updated on each GPS update)
     current_lat: Optional[float] = None
     current_lon: Optional[float] = None
 
-    # 설정
+    # Settings
     travel_mode: str = "transit"
     goal_time: Optional[datetime] = None
-    last_train: bool = False          # 막차 여부
-    repeat_days: Optional[str] = None  # 반복 요일 (예: "MON,WED,FRI")
+    last_train: bool = False          # Last train flag
+    repeat_days: Optional[str] = None  # Repeat days (e.g. "MON,WED,FRI")
     planned_date: Optional[str] = None
     alarm_enabled: bool = True
 
-    # 계산 결과 (ETA 재계산 시 갱신 → DB write-back)
+    # Computed results (updated on ETA recalculation → DB write-back)
     eta_sec: Optional[float] = None
     distance_m: Optional[float] = None
-    alarm_time: Optional[str] = None   # 출발 알람 시각 (ISO 8601)
+    alarm_time: Optional[str] = None   # Departure alarm time (ISO 8601)
     status: str = "unknown"
     last_updated: Optional[str] = None
 
 
 # ------------------------------------------------------------------
-# 버퍼 계산 (멤버 설정 우선, latency 기록 fallback)
+# Buffer calculation (member settings take priority, latency records as fallback)
 # ------------------------------------------------------------------
 
 def _get_buffer_minutes(member_id: str) -> float:
     """
-    1순위: 캐시된 멤버 설정의 '여유 시간' (DB Webhook으로 Push된 값)
-    2순위: DB 멤버 설정 직접 조회 (캐시 미스 fallback)
-    3순위: 과거 지각 기록 기반 계산값 (recommended_buffer)
+    1st: Cached member settings 'buffer time' (value pushed via DB Webhook)
+    2nd: DB member settings direct query (fallback on cache miss)
+    3rd: Computed value based on past lateness records (recommended_buffer)
     """
     settings = _cache.get_member_settings(member_id)
     if settings is None and _db:
@@ -96,7 +96,7 @@ def _get_buffer_minutes(member_id: str) -> float:
 
 
 # ------------------------------------------------------------------
-# ETA + 알람 계산
+# ETA + alarm calculation
 # ------------------------------------------------------------------
 
 def _compute_status(eta_sec: float, distance_m: float, goal_time: Optional[datetime]) -> str:
@@ -119,8 +119,8 @@ def _compute_status(eta_sec: float, distance_m: float, goal_time: Optional[datet
 
 def compute_eta(journey: Journey, kakao_api_key: str = "") -> Journey:
     """
-    현재 위치 → 목적지 ETA를 계산하고 Journey 객체를 갱신한다.
-    카카오 API 실패 시 Haversine 직선 거리로 fallback.
+    Compute ETA from current location to destination and update the Journey object.
+    Falls back to Haversine straight-line distance if Kakao API fails.
     """
     if journey.current_lat is None or journey.dest_lat is None:
         return journey
@@ -156,7 +156,7 @@ def compute_eta(journey: Journey, kakao_api_key: str = "") -> Journey:
 
 
 # ------------------------------------------------------------------
-# DB 연동
+# DB integration
 # ------------------------------------------------------------------
 
 def get_journey(journey_id: str) -> Optional[Journey]:
@@ -182,8 +182,8 @@ def update_location(
     kakao_api_key: str = "",
 ) -> Optional[dict]:
     """
-    위치를 업데이트하고 ETA를 재계산한다.
-    DB 연결 시 결과를 write-back한다.
+    Update location and recalculate ETA.
+    When connected to DB, writes the result back.
     """
     raw = _cache.get_journey(journey_id)
     if raw is None and _db:
@@ -211,7 +211,7 @@ def update_location(
 
 
 # ------------------------------------------------------------------
-# DB 응답 → 내부 모델 변환
+# DB response → internal model conversion
 # ------------------------------------------------------------------
 
 def _from_db(raw: dict) -> Journey:
@@ -247,7 +247,7 @@ def _from_db(raw: dict) -> Journey:
 
 
 # ------------------------------------------------------------------
-# 직렬화
+# Serialization
 # ------------------------------------------------------------------
 
 def to_dict(j: Journey) -> dict:

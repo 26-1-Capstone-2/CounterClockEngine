@@ -1,9 +1,9 @@
 """
-카카오 모빌리티 길찾기 API 연동
-- 출발지/목적지 좌표 → 실제 경로 좌표 + 소요 시간
-- 경로를 시뮬레이션용 고정 간격 스텝으로 리샘플링
+Kakao Mobility Directions API integration
+- Origin/destination coordinates → actual route coordinates + travel time
+- Resample route to fixed-interval steps for simulation
 
-주의: 카카오 API는 좌표를 경도,위도(lon,lat) 순서로 받음
+Note: Kakao API accepts coordinates in longitude,latitude (lon,lat) order
 """
 
 from datetime import datetime, timedelta
@@ -22,16 +22,16 @@ def fetch_route(
     priority: str = "RECOMMEND",
 ) -> tuple[list[tuple[float, float]], int, int]:
     """
-    카카오 모빌리티 길찾기 API 호출
+    Call Kakao Mobility Directions API
 
     Returns:
-        coords      : [(lat, lon), ...] 경로 좌표 목록
-        duration_sec: 총 소요 시간 (초)
-        distance_m  : 총 거리 (미터)
+        coords      : [(lat, lon), ...] list of route coordinates
+        duration_sec: total travel time (seconds)
+        distance_m  : total distance (meters)
     """
     headers = {"Authorization": f"KakaoAK {api_key}"}
     params = {
-        "origin":      f"{origin_lon},{origin_lat}",   # 카카오는 경도,위도 순서
+        "origin":      f"{origin_lon},{origin_lat}",   # Kakao uses lon,lat order
         "destination": f"{dest_lon},{dest_lat}",
         "priority":    priority,
     }
@@ -41,18 +41,18 @@ def fetch_route(
     data = resp.json()
 
     if not data.get("routes"):
-        raise ValueError("경로 응답이 비어 있습니다.")
+        raise ValueError("Route response is empty.")
 
     route = data["routes"][0]
     result_code = route.get("result_code", 0)
     if result_code != 0:
-        raise ValueError(f"경로 탐색 실패 (code={result_code}): {route.get('result_msg', '알 수 없음')}")
+        raise ValueError(f"Route search failed (code={result_code}): {route.get('result_msg', 'Unknown')}")
 
     summary      = route["summary"]
     duration_sec = summary["duration"]
     distance_m   = summary["distance"]
 
-    # vertexes: [lon0, lat0, lon1, lat1, ...] 연속 배열
+    # vertexes: [lon0, lat0, lon1, lat1, ...] continuous array
     coords: list[tuple[float, float]] = []
     for section in route["sections"]:
         for road in section["roads"]:
@@ -64,13 +64,13 @@ def fetch_route(
                     coords.append((lat_v, lon_v))
 
     if not coords:
-        raise ValueError("경로 좌표를 추출할 수 없습니다.")
+        raise ValueError("Could not extract route coordinates.")
 
     return coords, duration_sec, distance_m
 
 
 def _cumulative_distances(coords: list[tuple[float, float]]) -> list[float]:
-    """각 좌표까지의 누적 거리(m) 계산"""
+    """Calculate cumulative distance (m) to each coordinate"""
     import math
     cum = [0.0]
     for i in range(1, len(coords)):
@@ -92,11 +92,12 @@ def resample_route(
     step_sec: int = 10,
 ) -> list[tuple[float, float, str]]:
     """
-    실제 경로 좌표를 step_sec 간격으로 리샘플링하여
-    시뮬레이션용 (lat, lon, speed_phase) 리스트 반환.
+    Resample actual route coordinates at step_sec intervals and
+    return a simulation-ready list of (lat, lon, speed_phase).
 
-    거리 비례 방식: 누적 거리를 기준으로 시간 스텝마다 위치를 결정하여
-    카카오 API가 도심에서 좌표를 밀집 반환하는 편향을 보정한다.
+    Distance-proportional method: determines position at each time step
+    based on cumulative distance, correcting the bias from Kakao API
+    returning densely packed coordinates in urban areas.
     """
     if not coords or duration_sec <= 0:
         return []
@@ -110,10 +111,10 @@ def resample_route(
     result = []
 
     for step in range(total_steps):
-        # 이 스텝에서 이동해야 할 누적 거리
+        # Cumulative distance to travel at this step
         target_d = (step / total_steps) * total_d
 
-        # 누적 거리 배열에서 target_d 위치 탐색 (이진 탐색)
+        # Search target_d position in cumulative distance array (binary search)
         lo, hi = 0, len(cum) - 1
         while lo + 1 < hi:
             mid = (lo + hi) // 2
@@ -142,12 +143,12 @@ def calculate_departure_time(
     priority: str = "RECOMMEND",
 ) -> tuple[datetime, int, int]:
     """
-    목표 도착 시간으로부터 출발해야 할 시간을 계산.
+    Calculate the departure time needed to arrive by the target arrival time.
 
     Returns:
-        departure_time: 출발해야 하는 시각
-        duration_sec  : 예상 소요 시간 (초)
-        distance_m    : 총 거리 (미터)
+        departure_time: time to depart
+        duration_sec  : estimated travel time (seconds)
+        distance_m    : total distance (meters)
     """
     _, duration_sec, distance_m = fetch_route(
         origin_lat, origin_lon, dest_lat, dest_lon, api_key, priority
@@ -166,32 +167,32 @@ def print_departure_plan(
 ) -> None:
     h, rem = divmod(duration_sec, 3600)
     m, s   = divmod(rem, 60)
-    time_str = f"{h}시간 {m}분 {s}초" if h else f"{m}분 {s}초"
+    time_str = f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
 
     print("\n" + "=" * 50)
-    print("  출발 시간 안내")
+    print("  Departure Time Guide")
     print("=" * 50)
-    print(f"  출발지   : {origin[0]:.4f}, {origin[1]:.4f}")
-    print(f"  목적지   : {dest[0]:.4f}, {dest[1]:.4f}")
-    print(f"  총 거리  : {distance_m / 1000:.2f} km")
-    print(f"  소요 시간: {time_str}")
+    print(f"  Origin      : {origin[0]:.4f}, {origin[1]:.4f}")
+    print(f"  Destination : {dest[0]:.4f}, {dest[1]:.4f}")
+    print(f"  Total dist  : {distance_m / 1000:.2f} km")
+    print(f"  Travel time : {time_str}")
     print("-" * 50)
-    print(f"  목표 도착 시각: {arrival_time.strftime('%Y-%m-%d %H:%M')}")
-    print(f"  출발해야 할 시각: {departure_time.strftime('%Y-%m-%d %H:%M')}")
+    print(f"  Target arrival time: {arrival_time.strftime('%Y-%m-%d %H:%M')}")
+    print(f"  Must depart by     : {departure_time.strftime('%Y-%m-%d %H:%M')}")
 
     now = datetime.now()
     if departure_time < now:
         late_sec = int((now - departure_time).total_seconds())
         lh, lrem = divmod(late_sec, 3600)
         lm, ls   = divmod(lrem, 60)
-        late_str = f"{lh}시간 {lm}분 {ls}초" if lh else f"{lm}분 {ls}초"
-        print(f"  ⚠️  이미 출발 시각이 {late_str} 지났습니다.")
+        late_str = f"{lh}h {lm}m {ls}s" if lh else f"{lm}m {ls}s"
+        print(f"  ⚠️  Departure time already passed by {late_str}.")
     else:
         remain_sec = int((departure_time - now).total_seconds())
         rh, rrem = divmod(remain_sec, 3600)
         rm, rs   = divmod(rrem, 60)
-        remain_str = f"{rh}시간 {rm}분 {rs}초" if rh else f"{rm}분 {rs}초"
-        print(f"  출발까지 남은 시간: {remain_str}")
+        remain_str = f"{rh}h {rm}m {rs}s" if rh else f"{rm}m {rs}s"
+        print(f"  Time remaining until departure: {remain_str}")
     print("=" * 50)
 
 
@@ -206,13 +207,13 @@ def fetch_and_resample(
     priority: str = "RECOMMEND",
 ) -> tuple[list[tuple[float, float, str]], int, int, datetime]:
     """
-    카카오 API 호출 + 리샘플링을 한 번에 수행.
+    Perform Kakao API call + resampling in one step.
 
     Returns:
-        route         : [(lat, lon, speed_phase), ...] 리샘플링된 경로
-        duration_sec  : 총 소요 시간 (초)
-        distance_m    : 총 거리 (미터)
-        departure_time: 실제 사용된 출발 시각 (지정하지 않으면 현재 시각)
+        route         : [(lat, lon, speed_phase), ...] resampled route
+        duration_sec  : total travel time (seconds)
+        distance_m    : total distance (meters)
+        departure_time: actual departure time used (current time if not specified)
     """
     coords, duration_sec, distance_m = fetch_route(
         origin_lat, origin_lon, dest_lat, dest_lon, api_key, priority
@@ -231,10 +232,10 @@ def print_route_summary(
 ) -> None:
     h, rem = divmod(duration_sec, 3600)
     m, s   = divmod(rem, 60)
-    time_str = f"{h}시간 {m}분 {s}초" if h else f"{m}분 {s}초"
+    time_str = f"{h}h {m}m {s}s" if h else f"{m}m {s}s"
 
-    print(f"  출발지  : {origin[0]:.4f}, {origin[1]:.4f}")
-    print(f"  목적지  : {dest[0]:.4f}, {dest[1]:.4f}")
-    print(f"  총 거리 : {distance_m / 1000:.2f} km")
-    print(f"  소요 시간: {time_str}")
-    print(f"  경로 좌표: {num_coords}개 포인트")
+    print(f"  Origin      : {origin[0]:.4f}, {origin[1]:.4f}")
+    print(f"  Destination : {dest[0]:.4f}, {dest[1]:.4f}")
+    print(f"  Total dist  : {distance_m / 1000:.2f} km")
+    print(f"  Travel time : {time_str}")
+    print(f"  Route coords: {num_coords} points")

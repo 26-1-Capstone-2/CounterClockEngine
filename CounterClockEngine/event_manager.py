@@ -31,18 +31,18 @@ class EventStatus:
 
     def summary(self) -> str:
         if self.arrived:
-            return f"[{self.event.title}] 도착 완료"
+            return f"[{self.event.title}] Arrived"
         if self.is_overdue:
             return (
-                f"[{self.event.title}] 출발 {abs(self.minutes_until_departure):.0f}분 초과 — 빠르게 이동하세요!"
+                f"[{self.event.title}] Departure overdue by {abs(self.minutes_until_departure):.0f} min — move quickly!"
             )
         if self.is_urgent:
             return (
-                f"[{self.event.title}] {self.minutes_until_departure:.0f}분 후 출발 필요 (긴급)"
+                f"[{self.event.title}] Must depart in {self.minutes_until_departure:.0f} min (urgent)"
             )
         return (
-            f"[{self.event.title}] {self.minutes_until_departure:.0f}분 후 출발 "
-            f"(이동 {self.travel_time_minutes:.0f}분 + 버퍼 {self.lateness_buffer_minutes:.0f}분)"
+            f"[{self.event.title}] Depart in {self.minutes_until_departure:.0f} min "
+            f"(travel {self.travel_time_minutes:.0f} min + buffer {self.lateness_buffer_minutes:.0f} min)"
         )
 
 
