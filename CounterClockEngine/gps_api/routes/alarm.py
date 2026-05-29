@@ -36,6 +36,49 @@ _TRANSIT_MODES = {"SUBWAY", "BUS", "ALL"}
 _VALID_MODES   = {"DRIVING"} | _TRANSIT_MODES
 _VALID_PRIORITIES = {"MIN_TIME", "MIN_TRANSFER", "MIN_WALK"}
 
+# ODSAY search_type values for fallback logic
+_SEARCH_TYPE_ALL = 0
+_FALLBACK_SEARCH_TYPES = {1, 2}  # SUBWAY=1, BUS=2
+
+
+def _fetch_transit_with_fallback(
+    origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+    search_type: int, opt: int,
+    search_dt=None,
+):
+    """Call fetch_transit_route; if BUS/SUBWAY returns no route, retry with ALL (search_type=0)."""
+    try:
+        return fetch_transit_route(
+            origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+            search_dt=search_dt, search_type=search_type, opt=opt,
+        )
+    except ValueError:
+        if search_type in _FALLBACK_SEARCH_TYPES:
+            return fetch_transit_route(
+                origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+                search_dt=search_dt, search_type=_SEARCH_TYPE_ALL, opt=opt,
+            )
+        raise
+
+
+def _find_last_train_with_fallback(
+    origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+    target_time, search_type: int, opt: int,
+):
+    """Call find_last_train_departure; if BUS/SUBWAY returns None, retry with ALL (search_type=0)."""
+    result = find_last_train_departure(
+        origin_lat, origin_lon, dest_lat, dest_lon,
+        odsay_key, target_time,
+        search_type=search_type, opt=opt,
+    )
+    if result is None and search_type in _FALLBACK_SEARCH_TYPES:
+        result = find_last_train_departure(
+            origin_lat, origin_lon, dest_lat, dest_lon,
+            odsay_key, target_time,
+            search_type=_SEARCH_TYPE_ALL, opt=opt,
+        )
+    return result
+
 
 def _compute_alarm(body: dict) -> dict:
     """
@@ -82,7 +125,7 @@ def _compute_alarm(body: dict) -> dict:
 
     if is_last_mode:
         odsay_key = current_app.config.get("ODSAY_API_KEY", "")
-        result = find_last_train_departure(
+        result = _find_last_train_with_fallback(
             current_lat, current_lng, dest_lat, dest_lng,
             odsay_key, target_time,
             search_type=search_type, opt=opt,
@@ -96,7 +139,7 @@ def _compute_alarm(body: dict) -> dict:
         # Calculate normal departure time based on target_time (for comparison with last train)
         try:
             odsay_key = current_app.config.get("ODSAY_API_KEY", "")
-            _, normal_duration_sec, _, _ = fetch_transit_route(
+            _, normal_duration_sec, _, _ = _fetch_transit_with_fallback(
                 current_lat, current_lng, dest_lat, dest_lng, odsay_key,
                 search_type=search_type, opt=opt,
             )
@@ -126,7 +169,7 @@ def _compute_alarm(body: dict) -> dict:
     try:
         if is_transit:
             odsay_key = current_app.config.get("ODSAY_API_KEY", "")
-            _, duration_sec, _, legs = fetch_transit_route(
+            _, duration_sec, _, legs = _fetch_transit_with_fallback(
                 current_lat, current_lng, dest_lat, dest_lng, odsay_key,
                 search_type=search_type, opt=opt,
             )
@@ -238,7 +281,7 @@ def _compute_appointment_alarm(body: dict) -> dict:
     try:
         if is_transit:
             odsay_key = current_app.config.get("ODSAY_API_KEY", "")
-            _, duration_sec, _, legs = fetch_transit_route(
+            _, duration_sec, _, legs = _fetch_transit_with_fallback(
                 current_lat, current_lng, dest_lat, dest_lng, odsay_key,
                 search_type=search_type, opt=opt,
             )
