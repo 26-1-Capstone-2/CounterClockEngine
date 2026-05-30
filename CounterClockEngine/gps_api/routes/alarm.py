@@ -23,6 +23,8 @@ from gps_api.core.transit_route import (
     fetch_transit_route,
     find_last_train_departure,
     first_walk_min,
+    total_walk_min,
+    walk_fallback,
     SEARCH_TYPE_MAP,
     PRIORITY_OPT_MAP,
 )
@@ -80,6 +82,31 @@ def _find_last_train_with_fallback(
     return result
 
 
+def _transit_duration(
+    origin_lat, origin_lon, dest_lat, dest_lon,
+    search_type: int, opt: int, config,
+) -> tuple[int, int, int]:
+    """
+    Resolve transit travel time, falling back to a walking estimate when the
+    trip is too short for ODSAY (under ~700 m, where it returns no route).
+
+    Returns (duration_sec, walk_to_station_min, total_walk_min).
+    """
+    is_short, walk_est_min = walk_fallback(origin_lat, origin_lon, dest_lat, dest_lon)
+    if not is_short:
+        odsay_key = config.get("ODSAY_API_KEY", "")
+        try:
+            _, duration_sec, _, legs = _fetch_transit_with_fallback(
+                origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+                search_type=search_type, opt=opt,
+            )
+            return duration_sec, first_walk_min(legs), total_walk_min(legs)
+        except ValueError:
+            # Near the 700 m boundary ODSAY can still return no route — walk instead.
+            pass
+    return walk_est_min * 60, walk_est_min, walk_est_min
+
+
 def _compute_alarm(body: dict) -> dict:
     """
     Common alarm calculation logic.
@@ -124,6 +151,21 @@ def _compute_alarm(body: dict) -> dict:
     total_buffer_min   = preparation_time + latency_buffer_min
 
     if is_last_mode:
+        # Too close for transit: walking has no schedule, so the latest
+        # departure is simply target_time minus the walking duration.
+        is_short, walk_est_min = walk_fallback(current_lat, current_lng, dest_lat, dest_lng)
+        if is_short:
+            last_departure_dt    = target_time - timedelta(minutes=walk_est_min)
+            departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
+            return {
+                "target_time":          target_time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "latency_buffer_min":   round(latency_buffer_min, 1),
+                "last_train_departure": last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "walk_to_station_min":  walk_est_min,
+                "total_walk_time":      walk_est_min,
+            }
+
         odsay_key = current_app.config.get("ODSAY_API_KEY", "")
         result = _find_last_train_with_fallback(
             current_lat, current_lng, dest_lat, dest_lng,
@@ -133,7 +175,7 @@ def _compute_alarm(body: dict) -> dict:
         if result is None:
             abort(404, description="No valid last-train route found for the given date. The last train may have already departed.")
 
-        last_departure_dt, last_duration_sec, walk_min = result
+        last_departure_dt, last_duration_sec, walk_min, walk_total_min = result
         last_arrival_dt      = last_departure_dt + timedelta(seconds=last_duration_sec)
         departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
 
@@ -143,23 +185,22 @@ def _compute_alarm(body: dict) -> dict:
             "latency_buffer_min":    round(latency_buffer_min, 1),
             "last_train_departure":  last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "walk_to_station_min":   walk_min,
+            "total_walk_time":       walk_total_min,
         }
 
     # Normal mode
     try:
         if is_transit:
-            odsay_key = current_app.config.get("ODSAY_API_KEY", "")
-            _, duration_sec, _, legs = _fetch_transit_with_fallback(
-                current_lat, current_lng, dest_lat, dest_lng, odsay_key,
-                search_type=search_type, opt=opt,
+            duration_sec, walk_min, walk_total = _transit_duration(
+                current_lat, current_lng, dest_lat, dest_lng,
+                search_type, opt, current_app.config,
             )
-            walk_min = first_walk_min(legs)
         else:
             duration_sec = _get_duration(
                 current_lat, current_lng, dest_lat, dest_lng,
                 transport_mode, current_app.config,
             )
-            walk_min = 0
+            walk_min = walk_total = 0
     except ValueError as e:
         abort(502, description=str(e))
     except Exception as e:
@@ -177,6 +218,7 @@ def _compute_alarm(body: dict) -> dict:
     }
     if is_transit:
         response["walk_to_station_min"] = walk_min
+    response["total_walk_time"] = walk_total
     return response
 
 
@@ -205,7 +247,8 @@ def journey_alarm():
         "departure_alarm_time": "2026-05-25T17:20:00",
         "estimated_arrival": "2026-05-25T18:00:00",
         "latency_buffer_min": 5.2,         // actual applied lateness pattern buffer (minutes)
-        "walk_to_station_min": 3           // included only for transit modes
+        "walk_to_station_min": 3,          // included only for transit modes
+        "total_walk_time": 8               // total walking minutes across the whole trip (0 for DRIVING)
       }
     """
     return jsonify(_compute_alarm(request.get_json(silent=True) or {}))
@@ -261,18 +304,16 @@ def _compute_appointment_alarm(body: dict) -> dict:
 
     try:
         if is_transit:
-            odsay_key = current_app.config.get("ODSAY_API_KEY", "")
-            _, duration_sec, _, legs = _fetch_transit_with_fallback(
-                current_lat, current_lng, dest_lat, dest_lng, odsay_key,
-                search_type=search_type, opt=opt,
+            duration_sec, walk_min, walk_total = _transit_duration(
+                current_lat, current_lng, dest_lat, dest_lng,
+                search_type, opt, current_app.config,
             )
-            walk_min = first_walk_min(legs)
         else:
             duration_sec = _get_duration(
                 current_lat, current_lng, dest_lat, dest_lng,
                 transport_mode, current_app.config,
             )
-            walk_min = 0
+            walk_min = walk_total = 0
     except ValueError as e:
         abort(502, description=str(e))
     except Exception as e:
@@ -289,6 +330,7 @@ def _compute_appointment_alarm(body: dict) -> dict:
     }
     if is_transit:
         response["walk_to_station_min"] = walk_min
+    response["total_walk_time"] = walk_total
     return response
 
 
@@ -315,7 +357,9 @@ def appointment_alarm():
       {
         "departure_alarm_time": "2026-05-25T17:30:00",
         "estimated_arrival": "2026-05-25T17:55:00",
-        "interval": 30                     // front-end GPS API polling interval (seconds)
+        "interval": 30,                    // front-end GPS API polling interval (seconds)
+        "walk_to_station_min": 3,          // included only for transit modes
+        "total_walk_time": 8               // total walking minutes across the whole trip (0 for DRIVING)
       }
     """
     return jsonify(_compute_appointment_alarm(request.get_json(silent=True) or {}))

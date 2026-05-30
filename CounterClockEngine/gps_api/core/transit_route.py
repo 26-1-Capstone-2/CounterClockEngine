@@ -188,6 +188,36 @@ def first_walk_min(legs: list[TransitLeg]) -> int:
     return 0
 
 
+def total_walk_min(legs: list[TransitLeg]) -> int:
+    """Returns the total walking time (minutes) summed across every WALK segment of the route."""
+    total_sec = sum(leg.duration_sec for leg in legs if leg.mode == "WALK")
+    return round(total_sec / 60)
+
+
+# ── Short-distance walking fallback ──────────────────────────────────
+# ODSAY returns no transit route when origin and destination are too close
+# (~700 m). For these cases we estimate walking time directly from the
+# straight-line distance, the same way map services show "도보 N분".
+SHORT_DISTANCE_THRESHOLD_M = 700   # below this ODSAY returns no transit route
+WALK_SPEED_M_PER_MIN       = 67.0  # ≈ 4 km/h average walking pace
+WALK_DETOUR_FACTOR         = 1.3   # straight-line → street-following correction
+
+
+def walk_fallback(origin_lat: float, origin_lon: float,
+                  dest_lat: float, dest_lon: float) -> tuple[bool, int]:
+    """
+    Estimate walking time for a short trip from the straight-line distance.
+
+    Returns (is_short, walk_minutes), where is_short indicates the points are
+    closer than SHORT_DISTANCE_THRESHOLD_M (i.e. ODSAY would return no route).
+    walk_minutes is always at least 1.
+    """
+    from gps_api.core.optimizer import haversine
+    dist_m  = haversine(origin_lat, origin_lon, dest_lat, dest_lon)
+    minutes = max(1, round((dist_m * WALK_DETOUR_FACTOR) / WALK_SPEED_M_PER_MIN))
+    return dist_m < SHORT_DISTANCE_THRESHOLD_M, minutes
+
+
 def find_last_train_departure(
     origin_lat: float,
     origin_lon: float,
@@ -197,7 +227,7 @@ def find_last_train_departure(
     base_dt: datetime,
     search_type: int = 0,
     opt: int = 0,
-) -> tuple[datetime, int, int] | None:
+) -> tuple[datetime, int, int, int] | None:
     """
     Finds the last valid public transit departure time using binary search.
 
@@ -209,7 +239,7 @@ def find_last_train_departure(
         opt        : ODSAY OPT (0=MIN_TIME, 1=MIN_TRANSFER, 2=MIN_WALK)
 
     Returns:
-        (last_departure_dt, duration_sec, walk_to_station_min) or None (no last train)
+        (last_departure_dt, duration_sec, walk_to_station_min, total_walk_min) or None (no last train)
     """
     key = _cache_key(origin_lat, origin_lon, dest_lat, dest_lon, base_dt)
     cached = _cache_get(key)
@@ -234,6 +264,7 @@ def find_last_train_departure(
     last_valid_dt: datetime | None = None
     last_valid_duration: int = 0
     last_valid_walk_min: int = 0
+    last_valid_total_walk_min: int = 0
 
     while (hi - lo).total_seconds() > 60:  # 1-minute precision
         mid = lo + (hi - lo) / 2
@@ -242,14 +273,18 @@ def find_last_train_departure(
                 origin_lat, origin_lon, dest_lat, dest_lon, api_key, mid,
                 search_type=search_type, opt=opt,
             )
-            last_valid_dt       = mid
-            last_valid_duration = duration_sec
-            last_valid_walk_min = first_walk_min(legs)
+            last_valid_dt             = mid
+            last_valid_duration       = duration_sec
+            last_valid_walk_min       = first_walk_min(legs)
+            last_valid_total_walk_min = total_walk_min(legs)
             lo = mid + timedelta(minutes=1)
         except ValueError:
             hi = mid - timedelta(minutes=1)
 
-    result = (last_valid_dt, last_valid_duration, last_valid_walk_min) if last_valid_dt else None
+    result = (
+        last_valid_dt, last_valid_duration,
+        last_valid_walk_min, last_valid_total_walk_min,
+    ) if last_valid_dt else None
     _cache_set(key, result)
     return result
 

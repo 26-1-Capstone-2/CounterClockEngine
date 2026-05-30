@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); ast.parse\\(open\\('gps_api/core/transit_route.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python -m py_compile gps_api/routes/alarm.py gps_api/core/transit_route.py)"
+    ]
+  }
+}
