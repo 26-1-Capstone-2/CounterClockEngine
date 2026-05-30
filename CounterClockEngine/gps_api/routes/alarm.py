@@ -134,32 +134,12 @@ def _compute_alarm(body: dict) -> dict:
             abort(404, description="No valid last-train route found for the given date. The last train may have already departed.")
 
         last_departure_dt, last_duration_sec, walk_min = result
-        last_arrival_dt = last_departure_dt + timedelta(seconds=last_duration_sec)
-
-        # Calculate normal departure time based on target_time (for comparison with last train)
-        try:
-            odsay_key = current_app.config.get("ODSAY_API_KEY", "")
-            _, normal_duration_sec, _, _ = _fetch_transit_with_fallback(
-                current_lat, current_lng, dest_lat, dest_lng, odsay_key,
-                search_type=search_type, opt=opt,
-            )
-        except Exception:
-            normal_duration_sec = last_duration_sec
-        normal_departure_dt = target_time - timedelta(seconds=normal_duration_sec)
-
-        # Set alarm based on whichever departure time is earlier
-        if last_departure_dt <= normal_departure_dt:
-            effective_departure = last_departure_dt
-            effective_arrival   = last_arrival_dt
-        else:
-            effective_departure = normal_departure_dt
-            effective_arrival   = target_time
-
-        departure_alarm_time = effective_departure - timedelta(minutes=total_buffer_min)
+        last_arrival_dt      = last_departure_dt + timedelta(seconds=last_duration_sec)
+        departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
 
         return {
+            "target_time":           last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "departure_alarm_time":  departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "estimated_arrival":     effective_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
             "latency_buffer_min":    round(latency_buffer_min, 1),
             "last_train_departure":  last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "walk_to_station_min":   walk_min,
@@ -190,6 +170,7 @@ def _compute_alarm(body: dict) -> dict:
     estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
 
     response = {
+        "target_time":          None,
         "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
         "latency_buffer_min":   round(latency_buffer_min, 1),
