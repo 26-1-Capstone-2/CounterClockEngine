@@ -167,6 +167,7 @@ def _compute_alarm(body: dict) -> dict:
         is_short, walk_est_min = walk_fallback(current_lat, current_lng, dest_lat, dest_lng)
         if is_short:
             last_departure_dt    = search_ref - timedelta(minutes=walk_est_min)
+            estimated_arrival    = last_departure_dt + timedelta(minutes=walk_est_min)
             departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
             interval, gps_mode   = _adaptive_gps_interval(
                 current_lat, current_lng, dest_lat, dest_lng,
@@ -174,8 +175,9 @@ def _compute_alarm(body: dict) -> dict:
                 member_id=member_id,
             )
             return {
-                "target_time":          search_ref.strftime("%Y-%m-%dT%H:%M:%S"),
+                "target_time":          last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                 "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
                 "latency_buffer_min":   round(latency_buffer_min, 1),
                 "last_train_departure": last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                 "interval":             interval,
@@ -203,8 +205,9 @@ def _compute_alarm(body: dict) -> dict:
         )
 
         return {
-            "target_time":           last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "target_time":           last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "departure_alarm_time":  departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "estimated_arrival":     last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "latency_buffer_min":    round(latency_buffer_min, 1),
             "last_train_departure":  last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "interval":              interval,
