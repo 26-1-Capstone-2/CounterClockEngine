@@ -60,6 +60,7 @@ class TransitLeg:
     duration_sec: int
     distance_m: int
     coords: list[tuple[float, float]] = field(default_factory=list)
+    start_name: str = ""  # boarding station/stop name (empty for WALK)
 
 
 # transport_mode → ODSAY SearchType
@@ -169,8 +170,12 @@ def fetch_transit_route(
             if ex and ey:
                 seg_coords.append((float(ey), float(ex)))
 
+        # Boarding station/stop name (only meaningful for non-WALK legs)
+        start_name = "" if mode == "WALK" else (sub.get("startName") or "")
+
         legs.append(TransitLeg(mode=mode, duration_sec=int(leg_dur),
-                               distance_m=int(leg_dist), coords=seg_coords))
+                               distance_m=int(leg_dist), coords=seg_coords,
+                               start_name=start_name))
         all_coords.extend(seg_coords)
 
     if not all_coords:
@@ -192,6 +197,14 @@ def total_walk_min(legs: list[TransitLeg]) -> int:
     """Returns the total walking time (minutes) summed across every WALK segment of the route."""
     total_sec = sum(leg.duration_sec for leg in legs if leg.mode == "WALK")
     return round(total_sec / 60)
+
+
+def boarding_station(legs: list[TransitLeg]) -> str | None:
+    """Returns the name of the first non-WALK boarding station/stop, or None if the route is pure walking."""
+    for leg in legs:
+        if leg.mode != "WALK" and leg.start_name:
+            return leg.start_name
+    return None
 
 
 # ── Short-distance walking fallback ──────────────────────────────────
@@ -227,7 +240,7 @@ def find_last_train_departure(
     base_dt: datetime,
     search_type: int = 0,
     opt: int = 0,
-) -> tuple[datetime, int, int, int] | None:
+) -> tuple[datetime, int, int, int, str | None] | None:
     """
     Finds the last valid public transit departure time using binary search.
 
@@ -239,7 +252,8 @@ def find_last_train_departure(
         opt        : ODSAY OPT (0=MIN_TIME, 1=MIN_TRANSFER, 2=MIN_WALK)
 
     Returns:
-        (last_departure_dt, duration_sec, walk_to_station_min, total_walk_min) or None (no last train)
+        (last_departure_dt, duration_sec, walk_to_station_min, total_walk_min, boarding_station_name)
+        or None (no last train). boarding_station_name is None for a pure-walking route.
     """
     key = _cache_key(origin_lat, origin_lon, dest_lat, dest_lon, base_dt)
     cached = _cache_get(key)
@@ -265,6 +279,7 @@ def find_last_train_departure(
     last_valid_duration: int = 0
     last_valid_walk_min: int = 0
     last_valid_total_walk_min: int = 0
+    last_valid_station: str | None = None
 
     while (hi - lo).total_seconds() > 60:  # 1-minute precision
         mid = lo + (hi - lo) / 2
@@ -277,6 +292,7 @@ def find_last_train_departure(
             last_valid_duration       = duration_sec
             last_valid_walk_min       = first_walk_min(legs)
             last_valid_total_walk_min = total_walk_min(legs)
+            last_valid_station        = boarding_station(legs)
             lo = mid + timedelta(minutes=1)
         except ValueError:
             hi = mid - timedelta(minutes=1)
@@ -284,6 +300,7 @@ def find_last_train_departure(
     result = (
         last_valid_dt, last_valid_duration,
         last_valid_walk_min, last_valid_total_walk_min,
+        last_valid_station,
     ) if last_valid_dt else None
     _cache_set(key, result)
     return result

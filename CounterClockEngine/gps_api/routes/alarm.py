@@ -184,6 +184,7 @@ def _compute_alarm(body: dict) -> dict:
                 "gps_mode":             gps_mode,
                 "walk_to_station_min":  walk_est_min,
                 "total_walk_time":      walk_est_min,
+                "where_last_station":   None,  # pure walking — no boarding station
             }
 
         odsay_key = current_app.config.get("ODSAY_API_KEY", "")
@@ -195,7 +196,7 @@ def _compute_alarm(body: dict) -> dict:
         if result is None:
             abort(404, description="No valid last-train route found for the given date. The last train may have already departed.")
 
-        last_departure_dt, last_duration_sec, walk_min, walk_total_min = result
+        last_departure_dt, last_duration_sec, walk_min, walk_total_min, last_station = result
         last_arrival_dt      = last_departure_dt + timedelta(seconds=last_duration_sec)
         departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
         interval, gps_mode   = _adaptive_gps_interval(
@@ -214,6 +215,7 @@ def _compute_alarm(body: dict) -> dict:
             "gps_mode":              gps_mode,
             "walk_to_station_min":   walk_min,
             "total_walk_time":       walk_total_min,
+            "where_last_station":    last_station,
         }
 
     # Normal mode

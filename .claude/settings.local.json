@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); ast.parse\\(open\\('gps_api/core/transit_route.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
-      "Bash(python -m py_compile gps_api/routes/alarm.py gps_api/core/transit_route.py)"
+      "Bash(python -m py_compile gps_api/routes/alarm.py gps_api/core/transit_route.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/core/transit_route.py'\\).read\\(\\)\\); ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python -c \"from gps_api.core.transit_route import TransitLeg, boarding_station; legs=[TransitLeg\\('WALK',60,80\\), TransitLeg\\('BUS',600,3000,start_name='강남역.강남역사거리'\\), TransitLeg\\('SUBWAY',300,2000,start_name='역삼역'\\)]; print\\('boarding:', boarding_station\\(legs\\)\\); print\\('pure walk:', boarding_station\\([TransitLeg\\('WALK',60,80\\)]\\)\\)\")"
     ]
   }
 }
