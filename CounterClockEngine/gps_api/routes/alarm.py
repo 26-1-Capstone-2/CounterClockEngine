@@ -17,7 +17,10 @@ from flask import Blueprint, request, jsonify, abort, current_app
 
 from gps_api.routes.personal import _get_duration, _parse_datetime
 from gps_api.core.latency import recommended_buffer
-from gps_api.core.optimizer import calculate_next_interval, LocationPoint, Geofence
+from gps_api.core.optimizer import (
+    calculate_next_interval, LocationPoint, Geofence,
+    classify_gps_mode, INTERVAL_MIN_S, INTERVAL_MAX_S,
+)
 from gps_api.core.transit_route import (
     fetch_transit_route,
     find_last_train_departure,
@@ -238,7 +241,7 @@ def _compute_alarm(body: dict) -> dict:
     )
 
     response = {
-        "target_time":          None,
+        "target_time":          target_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
         "latency_buffer_min":   round(latency_buffer_min, 1),
@@ -321,6 +324,15 @@ def _adaptive_gps_interval(
         eta_sec=duration_sec,
         appointment_remaining_sec=appointment_remaining_sec,
     )
+
+    if len(history) < 2:
+        # Pre-departure: no real speed data, so act_mult (≈3.0) and slc_mult (2.0)
+        # would incorrectly inflate the interval. Use only the cosine urgency directly.
+        import math
+        raw = INTERVAL_MIN_S + 0.5 * (INTERVAL_MAX_S - INTERVAL_MIN_S) * (1.0 + math.cos(math.pi * result.urgency))
+        interval = max(int(min(round(raw), INTERVAL_MAX_S)), 1)
+        return interval, classify_gps_mode(interval)
+
     return result.next_interval, result.gps_mode
 
 
