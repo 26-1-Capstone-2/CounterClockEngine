@@ -8,10 +8,8 @@ Common calculations:
   departure_alarm_time = departure_time - preparation_time - latency_buffer
   estimated_arrival    = departure_time + duration_sec
 
-interval (seconds): GPS polling interval based on time remaining until departure alarm
-  > 60 min  → 60 sec
-  30~60 min → 30 sec
-  < 30 min  → 15 sec
+interval (seconds): Adaptive GPS polling interval via Cosine Blend + Sigmoid Activity Recognition
+  urgency = blend(distance_urgency, time_urgency)  →  interval in [3, 300] seconds
 """
 
 from datetime import datetime, timedelta
@@ -19,6 +17,7 @@ from flask import Blueprint, request, jsonify, abort, current_app
 
 from gps_api.routes.personal import _get_duration, _parse_datetime
 from gps_api.core.latency import recommended_buffer
+from gps_api.core.optimizer import calculate_next_interval, LocationPoint, Geofence
 from gps_api.core.transit_route import (
     fetch_transit_route,
     find_last_train_departure,
@@ -112,8 +111,7 @@ def _compute_alarm(body: dict) -> dict:
     Common alarm calculation logic.
     If member_id is provided, applies an additional latency_buffer based on lateness patterns.
     """
-    required = ("current_lat", "current_lng", "dest_lat", "dest_lng",
-                "transport_mode", "target_time")
+    required = ("current_lat", "current_lng", "dest_lat", "dest_lng", "transport_mode")
     for field in required:
         if field not in body:
             abort(400, description=f"{field} field is required.")
@@ -126,12 +124,19 @@ def _compute_alarm(body: dict) -> dict:
     except (TypeError, ValueError):
         abort(400, description="lat/lng values must be numeric.")
 
-    transport_mode = str(body["transport_mode"]).upper()
-    priority_type  = str(body.get("priority_type", "MIN_TIME")).upper()
-    target_time    = _parse_datetime(body["target_time"])
+    transport_mode   = str(body["transport_mode"]).upper()
+    priority_type    = str(body.get("priority_type", "MIN_TIME")).upper()
     preparation_time = float(body.get("preparation_time", 0))
-    member_id      = body.get("member_id")
-    is_last_mode   = bool(body.get("is_last_mode", False))
+    member_id        = body.get("member_id")
+    is_last_mode     = bool(body.get("is_last_mode", False))
+
+    target_time_raw = body.get("target_time")
+    if target_time_raw is not None:
+        target_time = _parse_datetime(target_time_raw)
+    elif not is_last_mode:
+        abort(400, description="target_time field is required when is_last_mode is false.")
+    else:
+        target_time = None  # is_last_mode=True: last train time will be computed below
 
     if transport_mode not in _VALID_MODES:
         abort(400, description=f"transport_mode must be one of: {', '.join(sorted(_VALID_MODES))}.")
@@ -151,17 +156,27 @@ def _compute_alarm(body: dict) -> dict:
     total_buffer_min   = preparation_time + latency_buffer_min
 
     if is_last_mode:
+        # When target_time is null, use today as the date reference for last-train search.
+        search_ref = target_time if target_time is not None else datetime.now()
+
         # Too close for transit: walking has no schedule, so the latest
-        # departure is simply target_time minus the walking duration.
+        # departure is simply search_ref minus the walking duration.
         is_short, walk_est_min = walk_fallback(current_lat, current_lng, dest_lat, dest_lng)
         if is_short:
-            last_departure_dt    = target_time - timedelta(minutes=walk_est_min)
+            last_departure_dt    = search_ref - timedelta(minutes=walk_est_min)
             departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
+            interval, gps_mode   = _adaptive_gps_interval(
+                current_lat, current_lng, dest_lat, dest_lng,
+                walk_est_min * 60, search_ref,
+                member_id=member_id,
+            )
             return {
-                "target_time":          target_time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "target_time":          search_ref.strftime("%Y-%m-%dT%H:%M:%S"),
                 "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "latency_buffer_min":   round(latency_buffer_min, 1),
                 "last_train_departure": last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "interval":             interval,
+                "gps_mode":             gps_mode,
                 "walk_to_station_min":  walk_est_min,
                 "total_walk_time":      walk_est_min,
             }
@@ -169,7 +184,7 @@ def _compute_alarm(body: dict) -> dict:
         odsay_key = current_app.config.get("ODSAY_API_KEY", "")
         result = _find_last_train_with_fallback(
             current_lat, current_lng, dest_lat, dest_lng,
-            odsay_key, target_time,
+            odsay_key, search_ref,
             search_type=search_type, opt=opt,
         )
         if result is None:
@@ -178,12 +193,19 @@ def _compute_alarm(body: dict) -> dict:
         last_departure_dt, last_duration_sec, walk_min, walk_total_min = result
         last_arrival_dt      = last_departure_dt + timedelta(seconds=last_duration_sec)
         departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
+        interval, gps_mode   = _adaptive_gps_interval(
+            current_lat, current_lng, dest_lat, dest_lng,
+            last_duration_sec, last_arrival_dt,
+            member_id=member_id,
+        )
 
         return {
             "target_time":           last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "departure_alarm_time":  departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
             "latency_buffer_min":    round(latency_buffer_min, 1),
             "last_train_departure":  last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "interval":              interval,
+            "gps_mode":              gps_mode,
             "walk_to_station_min":   walk_min,
             "total_walk_time":       walk_total_min,
         }
@@ -209,12 +231,19 @@ def _compute_alarm(body: dict) -> dict:
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
     estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    interval, gps_mode   = _adaptive_gps_interval(
+        current_lat, current_lng, dest_lat, dest_lng,
+        duration_sec, target_time,
+        member_id=member_id,
+    )
 
     response = {
         "target_time":          None,
         "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
         "latency_buffer_min":   round(latency_buffer_min, 1),
+        "interval":             interval,
+        "gps_mode":             gps_mode,
     }
     if is_transit:
         response["walk_to_station_min"] = walk_min
@@ -235,7 +264,7 @@ def journey_alarm():
         "dest_lng": 127.05678,
         "transport_mode": "ALL",           // DRIVING | SUBWAY | BUS | ALL
         "priority_type": "MIN_TIME",       // MIN_TIME | MIN_TRANSFER | MIN_WALK
-        "target_time": "2026-05-25T18:00:00",
+        "target_time": "2026-05-25T18:00:00",  // optional when is_last_mode=true (null → Flask computes from last train)
         "is_last_mode": false,
         "preparation_time": 10,            // in minutes
         "member_id": 1234,                 // optional — used for lateness pattern personalization
@@ -247,6 +276,7 @@ def journey_alarm():
         "departure_alarm_time": "2026-05-25T17:20:00",
         "estimated_arrival": "2026-05-25T18:00:00",
         "latency_buffer_min": 5.2,         // actual applied lateness pattern buffer (minutes)
+        "interval": 30,                    // front-end GPS API polling interval (seconds)
         "walk_to_station_min": 3,          // included only for transit modes
         "total_walk_time": 8               // total walking minutes across the whole trip (0 for DRIVING)
       }
@@ -254,14 +284,44 @@ def journey_alarm():
     return jsonify(_compute_alarm(request.get_json(silent=True) or {}))
 
 
-def _gps_interval(alarm_dt: datetime) -> int:
-    """Returns the GPS polling interval (seconds) based on remaining time until the departure alarm."""
-    remaining_min = (alarm_dt - datetime.now()).total_seconds() / 60
-    if remaining_min > 60:
-        return 60
-    if remaining_min > 30:
-        return 30
-    return 15
+# member_id → last LocationPoint (in-memory, process-scoped)
+_location_history: dict[str, LocationPoint] = {}
+
+
+def _adaptive_gps_interval(
+    current_lat: float,
+    current_lng: float,
+    dest_lat: float,
+    dest_lng: float,
+    duration_sec: float,
+    target_time: datetime,
+    member_id: str | None = None,
+) -> tuple[int, str]:
+    """Returns (interval_sec, gps_mode) using Cosine Blend + Sigmoid activity recognition.
+
+    When member_id is provided, the previous location is recalled from an in-memory
+    cache so that real movement speed can be fed into the sigmoid multiplier.
+    """
+    current_point = LocationPoint(lat=current_lat, lon=current_lng)
+
+    if member_id:
+        prev = _location_history.get(member_id)
+        history = [prev, current_point] if prev is not None else [current_point]
+        _location_history[member_id] = current_point
+    else:
+        history = [current_point]
+
+    geofences = [Geofence(id="destination", lat=dest_lat, lon=dest_lng, radius=100.0)]
+    appointment_remaining_sec = max((target_time - datetime.now()).total_seconds(), 0.0)
+    result = calculate_next_interval(
+        user_lat=current_lat,
+        user_lon=current_lng,
+        history=history,
+        geofences=geofences,
+        eta_sec=duration_sec,
+        appointment_remaining_sec=appointment_remaining_sec,
+    )
+    return result.next_interval, result.gps_mode
 
 
 def _compute_appointment_alarm(body: dict) -> dict:
@@ -322,11 +382,17 @@ def _compute_appointment_alarm(body: dict) -> dict:
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
     estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    interval, gps_mode   = _adaptive_gps_interval(
+        current_lat, current_lng, dest_lat, dest_lng,
+        duration_sec, target_time,
+        member_id=member_id,
+    )
 
     response = {
         "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
-        "interval":             _gps_interval(departure_alarm_time),
+        "interval":             interval,
+        "gps_mode":             gps_mode,
     }
     if is_transit:
         response["walk_to_station_min"] = walk_min
