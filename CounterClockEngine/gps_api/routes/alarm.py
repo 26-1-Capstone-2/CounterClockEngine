@@ -382,9 +382,10 @@ def _compute_appointment_alarm(body: dict) -> dict:
     latency_buffer_min = recommended_buffer(member_id) if member_id else _DEFAULT_BUFFER_MIN
     total_buffer_min   = preparation_time + latency_buffer_min
 
+    which_station = None
     try:
         if is_transit:
-            duration_sec, walk_min, walk_total = _transit_duration(
+            duration_sec, walk_min, walk_total, which_station = _transit_duration(
                 current_lat, current_lng, dest_lat, dest_lng,
                 search_type, opt, current_app.config,
             )
@@ -413,6 +414,7 @@ def _compute_appointment_alarm(body: dict) -> dict:
         "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
         "interval":             interval,
         "gps_mode":             gps_mode,
+        "which_station":        which_station,
     }
     if is_transit:
         response["walk_to_station_min"] = walk_min
@@ -444,6 +446,7 @@ def appointment_alarm():
         "departure_alarm_time": "2026-05-25T17:30:00",
         "estimated_arrival": "2026-05-25T17:55:00",
         "interval": 30,                    // front-end GPS API polling interval (seconds)
+        "which_station": "강남",           // boarding station name (null for DRIVING / walk fallback)
         "walk_to_station_min": 3,          // included only for transit modes
         "total_walk_time": 8               // total walking minutes across the whole trip (0 for DRIVING)
       }
