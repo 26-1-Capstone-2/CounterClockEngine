@@ -26,6 +26,7 @@ from gps_api.core.transit_route import (
     find_last_train_departure,
     first_walk_min,
     total_walk_min,
+    boarding_station,
     walk_fallback,
     SEARCH_TYPE_MAP,
     PRIORITY_OPT_MAP,
@@ -87,12 +88,12 @@ def _find_last_train_with_fallback(
 def _transit_duration(
     origin_lat, origin_lon, dest_lat, dest_lon,
     search_type: int, opt: int, config,
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, str | None]:
     """
     Resolve transit travel time, falling back to a walking estimate when the
     trip is too short for ODSAY (under ~700 m, where it returns no route).
 
-    Returns (duration_sec, walk_to_station_min, total_walk_min).
+    Returns (duration_sec, walk_to_station_min, total_walk_min, boarding_station_name).
     """
     is_short, walk_est_min = walk_fallback(origin_lat, origin_lon, dest_lat, dest_lon)
     if not is_short:
@@ -102,11 +103,11 @@ def _transit_duration(
                 origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
                 search_type=search_type, opt=opt,
             )
-            return duration_sec, first_walk_min(legs), total_walk_min(legs)
+            return duration_sec, first_walk_min(legs), total_walk_min(legs), boarding_station(legs)
         except ValueError:
             # Near the 700 m boundary ODSAY can still return no route — walk instead.
             pass
-    return walk_est_min * 60, walk_est_min, walk_est_min
+    return walk_est_min * 60, walk_est_min, walk_est_min, None
 
 
 def _compute_alarm(body: dict) -> dict:
@@ -184,7 +185,7 @@ def _compute_alarm(body: dict) -> dict:
                 "gps_mode":             gps_mode,
                 "walk_to_station_min":  walk_est_min,
                 "total_walk_time":      walk_est_min,
-                "where_last_station":   None,  # pure walking — no boarding station
+                "which_station":        None,
             }
 
         odsay_key = current_app.config.get("ODSAY_API_KEY", "")
@@ -215,13 +216,14 @@ def _compute_alarm(body: dict) -> dict:
             "gps_mode":              gps_mode,
             "walk_to_station_min":   walk_min,
             "total_walk_time":       walk_total_min,
-            "where_last_station":    last_station,
+            "which_station":         last_station,
         }
 
     # Normal mode
+    which_station = None
     try:
         if is_transit:
-            duration_sec, walk_min, walk_total = _transit_duration(
+            duration_sec, walk_min, walk_total, which_station = _transit_duration(
                 current_lat, current_lng, dest_lat, dest_lng,
                 search_type, opt, current_app.config,
             )
@@ -252,6 +254,7 @@ def _compute_alarm(body: dict) -> dict:
         "latency_buffer_min":   round(latency_buffer_min, 1),
         "interval":             interval,
         "gps_mode":             gps_mode,
+        "which_station":        which_station,
     }
     if is_transit:
         response["walk_to_station_min"] = walk_min

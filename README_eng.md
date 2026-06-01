@@ -677,14 +677,17 @@ departure_alarm_time = min(last_train_departure, normal_departure) − total_buf
   "member_id": "user_001"    // optional
 }
 
-// Response (Last train mode — last_train_departure field added)
+// Response (Last train mode — last_train_departure, where_last_station fields added)
 {
   "departure_alarm_time": "2026-05-25T22:15:00",
   "estimated_arrival":    "2026-05-25T23:47:00",
   "latency_buffer_min":   10.0,
-  "last_train_departure": "2026-05-25T22:25:00"  // found last train departure time (reference)
+  "last_train_departure": "2026-05-25T22:25:00",  // found last train departure time (reference)
+  "where_last_station":   "Gangnam"               // boarding station/stop for the last train (null for a walking-only route)
 }
 ```
+
+> `where_last_station` is included only when `is_last_mode: true`. It is the boarding station name of the first non-walk (subway/bus) leg; when `transport_type` is `BUS` it returns the bus stop name. It is `null` when the trip is too short and resolves to walking only.
 
 `latency_buffer_min` = 10.0 (cold-start default) when `member_id` is not provided.
 

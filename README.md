@@ -677,14 +677,17 @@ departure_alarm_time = min(last_train_departure, normal_departure) − total_buf
   "member_id": "user_001"    // optional
 }
 
-// Response (막차 모드 — last_train_departure 필드 추가)
+// Response (막차 모드 — last_train_departure, where_last_station 필드 추가)
 {
   "departure_alarm_time": "2026-05-25T22:15:00",
   "estimated_arrival":    "2026-05-25T23:47:00",
   "latency_buffer_min":   10.0,
-  "last_train_departure": "2026-05-25T22:25:00"  // 탐색된 막차 출발 시각 (참고용)
+  "last_train_departure": "2026-05-25T22:25:00",  // 탐색된 막차 출발 시각 (참고용)
+  "where_last_station":   "강남역"                 // 막차를 타는 승차역/정류장 이름 (도보 전용 경로면 null)
 }
 ```
+
+> `where_last_station`은 `is_last_mode: true`일 때만 포함됩니다. 첫 번째 비도보(지하철/버스) 구간의 승차역 이름이며, `transport_type`이 `BUS`이면 버스 정류장 이름이 반환됩니다. 거리가 너무 가까워 도보로만 이동하는 경우 `null`입니다.
 
 `member_id` 미전달 시 `latency_buffer_min` = 10.0 (cold-start 기본값).
 

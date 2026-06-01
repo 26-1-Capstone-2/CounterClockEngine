@@ -49,6 +49,11 @@ def _cache_set(key: tuple, result) -> None:
 
 ODSAY_BASE_URL = "https://api.odsay.com/v1/api"
 
+
+def _as_dict(val) -> dict:
+    """Return val if it is a dict, otherwise {}. Guards against ODSAY returning a list where a dict is expected."""
+    return val if isinstance(val, dict) else {}
+
 # ODSAY trafficType codes
 TRAFFIC_TYPE = {1: "SUBWAY", 2: "BUS", 3: "WALK"}
 TRAFFIC_LABEL = {"SUBWAY": "지하철", "BUS": "버스", "WALK": "도보"}
@@ -115,9 +120,12 @@ def fetch_transit_route(
     data = resp.json()
 
     if "error" in data:
-        raise ValueError(f"ODSAY error: {data['error'].get('message', data['error'])}")
+        err = data['error']
+        import logging; logging.getLogger(__name__).warning("ODSAY raw error: %s | params: %s", err, params)
+        msg = err[0].get('message', err) if isinstance(err, list) else err.get('message', err)
+        raise ValueError(f"ODSAY error: {msg}")
 
-    paths = (data.get("result") or {}).get("path", [])
+    paths = _as_dict(data.get("result")).get("path", [])
     if not paths:
         raise ValueError("ODSAY route response is empty.")
 
@@ -139,7 +147,7 @@ def fetch_transit_route(
         seg_coords: list[tuple[float, float]] = []
 
         # Station/stop coordinate list
-        for st in (sub.get("passStopList") or {}).get("stations", []):
+        for st in _as_dict(sub.get("passStopList")).get("stations", []):
             x = st.get("x") or st.get("lon")
             y = st.get("y") or st.get("lat")
             if x and y:
@@ -150,7 +158,7 @@ def fetch_transit_route(
 
         # passShape polyline (detailed geometry) — "lon,lat lon,lat ..." format
         if not seg_coords:
-            shape = (sub.get("passShape") or {}).get("polyline", "")
+            shape = _as_dict(sub.get("passShape")).get("polyline", "")
             for pair in shape.split():
                 parts = pair.split(",")
                 if len(parts) == 2:
@@ -161,10 +169,10 @@ def fetch_transit_route(
 
         # If no coordinates, use only departure/arrival station
         if not seg_coords:
-            sx = sub.get("startX") or sub.get("startStation", {}).get("x")
-            sy = sub.get("startY") or sub.get("startStation", {}).get("y")
-            ex = sub.get("endX") or sub.get("endStation", {}).get("x")
-            ey = sub.get("endY") or sub.get("endStation", {}).get("y")
+            sx = sub.get("startX") or _as_dict(sub.get("startStation")).get("x")
+            sy = sub.get("startY") or _as_dict(sub.get("startStation")).get("y")
+            ex = sub.get("endX") or _as_dict(sub.get("endStation")).get("x")
+            ey = sub.get("endY") or _as_dict(sub.get("endStation")).get("y")
             if sx and sy:
                 seg_coords.append((float(sy), float(sx)))
             if ex and ey:
