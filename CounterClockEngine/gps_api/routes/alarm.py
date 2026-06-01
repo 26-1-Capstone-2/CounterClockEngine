@@ -180,7 +180,7 @@ def _compute_alarm(body: dict) -> dict:
                 "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
                 "latency_buffer_min":   round(latency_buffer_min, 1),
-                "last_train_departure": last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "boarding_time":        last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                 "interval":             interval,
                 "gps_mode":             gps_mode,
                 "walk_to_station_min":  walk_est_min,
@@ -211,7 +211,7 @@ def _compute_alarm(body: dict) -> dict:
             "departure_alarm_time":  departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
             "estimated_arrival":     last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "latency_buffer_min":    round(latency_buffer_min, 1),
-            "last_train_departure":  last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "boarding_time":         last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "interval":              interval,
             "gps_mode":              gps_mode,
             "walk_to_station_min":   walk_min,
@@ -446,7 +446,7 @@ def appointment_alarm():
         "departure_alarm_time": "2026-05-25T17:30:00",
         "estimated_arrival": "2026-05-25T17:55:00",
         "interval": 30,                    // front-end GPS API polling interval (seconds)
-        "which_station": "강남",           // boarding station name (null for DRIVING / walk fallback)
+        "which_station": "강남역",         // boarding station/stop name w/ 역·정류장 suffix (null for DRIVING / walk fallback)
         "walk_to_station_min": 3,          // included only for transit modes
         "total_walk_time": 8               // total walking minutes across the whole trip (0 for DRIVING)
       }

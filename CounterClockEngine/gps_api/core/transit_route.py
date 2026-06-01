@@ -208,10 +208,22 @@ def total_walk_min(legs: list[TransitLeg]) -> int:
 
 
 def boarding_station(legs: list[TransitLeg]) -> str | None:
-    """Returns the name of the first non-WALK boarding station/stop, or None if the route is pure walking."""
+    """
+    Returns the name of the first non-WALK boarding station/stop, suffixed by
+    transit type so the caller need not know which mode was actually used:
+      SUBWAY → "강남역"
+      BUS    → "동작실버센터입구. 용양봉저정 정류장"
+    For ALL searches the suffix follows the boarding leg's real mode.
+    Returns None if the route is pure walking.
+    """
     for leg in legs:
         if leg.mode != "WALK" and leg.start_name:
-            return leg.start_name
+            name = leg.start_name
+            if leg.mode == "SUBWAY":
+                return name if name.endswith("역") else f"{name}역"
+            if leg.mode == "BUS":
+                return name if name.endswith("정류장") else f"{name} 정류장"
+            return name
     return None
 
 
