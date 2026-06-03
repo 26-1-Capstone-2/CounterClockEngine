@@ -241,6 +241,8 @@ def _compute_alarm(body: dict) -> dict:
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
     estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    # Time the user actually boards transit: leave origin, then walk to the station.
+    boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
         current_lat, current_lng, dest_lat, dest_lng,
         duration_sec, target_time,
@@ -252,6 +254,7 @@ def _compute_alarm(body: dict) -> dict:
         "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
         "latency_buffer_min":   round(latency_buffer_min, 1),
+        "boarding_time":        boarding_dt.strftime("%Y-%m-%dT%H:%M:%S") if boarding_dt else None,
         "interval":             interval,
         "gps_mode":             gps_mode,
         "which_station":        which_station,
@@ -287,6 +290,7 @@ def journey_alarm():
         "departure_alarm_time": "2026-05-25T17:20:00",
         "estimated_arrival": "2026-05-25T18:00:00",
         "latency_buffer_min": 5.2,         // actual applied lateness pattern buffer (minutes)
+        "boarding_time": "2026-05-25T17:23:00",  // time the user boards transit (null for DRIVING)
         "interval": 30,                    // front-end GPS API polling interval (seconds)
         "walk_to_station_min": 3,          // included only for transit modes
         "total_walk_time": 8               // total walking minutes across the whole trip (0 for DRIVING)
@@ -403,6 +407,8 @@ def _compute_appointment_alarm(body: dict) -> dict:
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
     estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    # Time the user actually boards transit: leave origin, then walk to the station.
+    boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
         current_lat, current_lng, dest_lat, dest_lng,
         duration_sec, target_time,
@@ -412,6 +418,7 @@ def _compute_appointment_alarm(body: dict) -> dict:
     response = {
         "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
         "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
+        "boarding_time":        boarding_dt.strftime("%Y-%m-%dT%H:%M:%S") if boarding_dt else None,
         "interval":             interval,
         "gps_mode":             gps_mode,
         "which_station":        which_station,
@@ -445,6 +452,7 @@ def appointment_alarm():
       {
         "departure_alarm_time": "2026-05-25T17:30:00",
         "estimated_arrival": "2026-05-25T17:55:00",
+        "boarding_time": "2026-05-25T17:33:00",  // time the user boards transit (null for DRIVING)
         "interval": 30,                    // front-end GPS API polling interval (seconds)
         "which_station": "강남역",         // boarding station/stop name w/ 역·정류장 suffix (null for DRIVING / walk fallback)
         "walk_to_station_min": 3,          // included only for transit modes
