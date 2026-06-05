@@ -6,7 +6,11 @@ Common calculations:
   departure_time       = target_time - duration_sec
   latency_buffer       = recommended_buffer(member_id)  # lateness pattern based, 10 min for cold-start
   departure_alarm_time = departure_time - preparation_time - latency_buffer
-  estimated_arrival    = departure_time + duration_sec
+  estimated_arrival    = now + duration_sec             # real-time ETA (depart now → arrive)
+
+In last-train mode, target_time is reported as the arrival time at home
+(= estimated_arrival), not the last train's departure time; the actual departure
+time is still available in the boarding_time field.
 
 interval (seconds): Adaptive GPS polling interval via Cosine Blend + Sigmoid Activity Recognition
   urgency = blend(distance_urgency, time_urgency)  →  interval in [3, 300] seconds
@@ -51,13 +55,24 @@ def _fetch_transit_with_fallback(
     search_type: int, opt: int,
     search_dt=None,
 ):
-    """Call fetch_transit_route; if BUS/SUBWAY returns no route, retry with ALL (search_type=0)."""
+    """Call fetch_transit_route; if BUS/SUBWAY returns no route, retry with ALL (search_type=0).
+
+    NOTE: this fallback means a SUBWAY (or BUS) request can come back with the
+    *other* mode. When ODSAY has no pure-subway route between the points it
+    raises ValueError, and we silently retry as ALL (subway+bus). The ALL result
+    may begin with a bus leg, so `which_station` / boarding_station() will report
+    a 버스 정류장 even though the caller asked for SUBWAY. This is intentional
+    (better to return *some* route than to fail), but it is why a SUBWAY request
+    can surface a bus stop. Drop the fallback below if strict mode matching is
+    required instead.
+    """
     try:
         return fetch_transit_route(
             origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
             search_dt=search_dt, search_type=search_type, opt=opt,
         )
     except ValueError:
+        # search_type 1=SUBWAY / 2=BUS had no route → fall back to ALL (mode may change).
         if search_type in _FALLBACK_SEARCH_TYPES:
             return fetch_transit_route(
                 origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
@@ -70,7 +85,12 @@ def _find_last_train_with_fallback(
     origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
     target_time, search_type: int, opt: int,
 ):
-    """Call find_last_train_departure; if BUS/SUBWAY returns None, retry with ALL (search_type=0)."""
+    """Call find_last_train_departure; if BUS/SUBWAY returns None, retry with ALL (search_type=0).
+
+    Same caveat as _fetch_transit_with_fallback: a SUBWAY/BUS request that has no
+    route in that mode falls back to ALL, so the returned boarding station may be
+    the other mode (e.g. a 버스 정류장 for a SUBWAY request).
+    """
     result = find_last_train_departure(
         origin_lat, origin_lon, dest_lat, dest_lon,
         odsay_key, target_time,
@@ -176,7 +196,8 @@ def _compute_alarm(body: dict) -> dict:
                 member_id=member_id,
             )
             return {
-                "target_time":          last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                # Last-train mode: target_time = arrival time at home, not departure time.
+                "target_time":          estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
                 "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
                 "latency_buffer_min":   round(latency_buffer_min, 1),
@@ -207,7 +228,8 @@ def _compute_alarm(body: dict) -> dict:
         )
 
         return {
-            "target_time":           last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            # Last-train mode: target_time = arrival time at home, not departure time.
+            "target_time":           last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "departure_alarm_time":  departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
             "estimated_arrival":     last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "latency_buffer_min":    round(latency_buffer_min, 1),
@@ -240,7 +262,9 @@ def _compute_alarm(body: dict) -> dict:
 
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
-    estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    # Real-time ETA: if the user departs now, they arrive after the travel duration.
+    # (departure_time + duration_sec would collapse back to target_time and be meaningless.)
+    estimated_arrival    = datetime.now() + timedelta(seconds=duration_sec)
     # Time the user actually boards transit: leave origin, then walk to the station.
     boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
@@ -287,8 +311,9 @@ def journey_alarm():
 
     Response JSON:
       {
+        "target_time": "2026-05-25T18:00:00",    // goal arrival time (= arrival time in last-train mode)
         "departure_alarm_time": "2026-05-25T17:20:00",
-        "estimated_arrival": "2026-05-25T18:00:00",
+        "estimated_arrival": "2026-05-25T17:45:00",
         "latency_buffer_min": 5.2,         // actual applied lateness pattern buffer (minutes)
         "boarding_time": "2026-05-25T17:23:00",  // time the user boards transit (null for DRIVING)
         "interval": 30,                    // front-end GPS API polling interval (seconds)
@@ -406,7 +431,9 @@ def _compute_appointment_alarm(body: dict) -> dict:
 
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
-    estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    # Real-time ETA: if the user departs now, they arrive after the travel duration.
+    # (departure_time + duration_sec would collapse back to target_time and be meaningless.)
+    estimated_arrival    = datetime.now() + timedelta(seconds=duration_sec)
     # Time the user actually boards transit: leave origin, then walk to the station.
     boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
@@ -451,7 +478,7 @@ def appointment_alarm():
     Response JSON:
       {
         "departure_alarm_time": "2026-05-25T17:30:00",
-        "estimated_arrival": "2026-05-25T17:55:00",
+        "estimated_arrival": "2026-05-25T17:50:00",
         "boarding_time": "2026-05-25T17:33:00",  // time the user boards transit (null for DRIVING)
         "interval": 30,                    // front-end GPS API polling interval (seconds)
         "which_station": "강남역",         // boarding station/stop name w/ 역·정류장 suffix (null for DRIVING / walk fallback)
