@@ -16,10 +16,11 @@ interval (seconds): Adaptive GPS polling interval via Cosine Blend + Sigmoid Act
   urgency = blend(distance_urgency, time_urgency)  →  interval in [3, 300] seconds
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify, abort, current_app
 
 from gps_api.routes.personal import _get_duration, _parse_datetime
+from gps_api.core.timeutil import now_kst as _now_kst
 from gps_api.core.latency import recommended_buffer
 from gps_api.core.optimizer import (
     calculate_next_interval, LocationPoint, Geofence,
@@ -39,16 +40,6 @@ from gps_api.core.transit_route import (
 bp = Blueprint("alarm", __name__)
 
 _DEFAULT_BUFFER_MIN = 10.0
-
-# Korea Standard Time (UTC+9). The server may run in GMT/UTC, but clients send and
-# expect wall-clock KST times, so "now" must be evaluated in KST to stay consistent
-# with the naive KST target_time values parsed from requests.
-_KST = timezone(timedelta(hours=9))
-
-
-def _now_kst() -> datetime:
-    """Current KST wall-clock time as a naive datetime (matches parsed target_time)."""
-    return datetime.now(_KST).replace(tzinfo=None)
 
 
 _TRANSIT_MODES = {"SUBWAY", "BUS", "ALL"}

@@ -9,6 +9,8 @@ import requests
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from gps_api.core.timeutil import now_kst
+
 # Last train search result cache: key → (result, expires_at)
 # key: (origin_lat_r, origin_lon_r, dest_lat_r, dest_lon_r, date)
 _last_train_cache: dict = {}
@@ -38,14 +40,14 @@ def _cache_get(key: tuple):
     if entry is None:
         return None
     result, expires_at = entry
-    if datetime.now() >= expires_at:
+    if now_kst() >= expires_at:
         del _last_train_cache[key]
         return None
     return result
 
 
 def _cache_set(key: tuple, result) -> None:
-    _last_train_cache[key] = (result, _next_4am(datetime.now()))
+    _last_train_cache[key] = (result, _next_4am(now_kst()))
 
 ODSAY_BASE_URL = "https://api.odsay.com/v1/api"
 
