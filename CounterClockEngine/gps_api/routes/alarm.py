@@ -114,11 +114,11 @@ def _transit_duration(
     """
     Resolve transit travel time for a trip arriving by target_time (KST).
 
-    The route is searched at the estimated *departure* time so that the result
-    reflects the actual time of day the user travels — e.g. a 03:00 arrival
-    finds no running bus and falls back to ALL / a walking estimate rather than
-    returning a daytime route. When target_time is None (or for short trips),
-    we fall back to a current-time search / walking estimate.
+    The route is searched at target_time so the result reflects the actual time
+    of day the user travels — e.g. a 03:00 trip finds no running bus and falls
+    back to ALL / a walking estimate rather than returning a daytime route. When
+    target_time is None (or for short trips), we search at the current time /
+    use a walking estimate.
 
     Returns (duration_sec, walk_to_station_min, total_walk_min, boarding_station_name).
     """
@@ -126,21 +126,13 @@ def _transit_duration(
     if not is_short:
         odsay_key = config.get("ODSAY_API_KEY", "")
         try:
-            # Pass 1: search at the arrival time to get a rough duration. (ODSAY
-            # plans a trip *departing* at search_dt, but the exact minute barely
-            # changes which services run, so the arrival time is a fine seed.)
+            # Search at target_time so the result reflects the actual time of day:
+            # if no service runs then (e.g. 03:00), ODSAY raises ValueError, which
+            # falls through to the ALL retry and then the walking estimate below.
             _, duration_sec, _, legs = _fetch_transit_with_fallback(
                 origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
                 search_type=search_type, opt=opt, search_dt=target_time,
             )
-            # Pass 2: refine by searching at the estimated departure time, which
-            # matters for long trips that cross a service boundary (e.g. last bus).
-            if target_time is not None:
-                departure_est = target_time - timedelta(seconds=duration_sec)
-                _, duration_sec, _, legs = _fetch_transit_with_fallback(
-                    origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
-                    search_type=search_type, opt=opt, search_dt=departure_est,
-                )
             return duration_sec, first_walk_min(legs), total_walk_min(legs), boarding_station(legs)
         except ValueError:
             # No transit route — either near the 700 m boundary, or no service at
