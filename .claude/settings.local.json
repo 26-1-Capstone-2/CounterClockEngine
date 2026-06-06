@@ -9,7 +9,9 @@
       "Bash(python -c ' *)",
       "Bash(git -C /home/jaekyungkim/Capstone2 status --short -- CounterClockEngine/gps_api)",
       "Bash(git -C /home/jaekyungkim/Capstone2 diff HEAD --stat -- CounterClockEngine/gps_api/routes/alarm.py CounterClockEngine/gps_api/core/timeutil.py CounterClockEngine/gps_api/core/transit_route.py)",
-      "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); print\\('alarm.py syntax OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); ast.parse\\(open\\('gps_api/core/transit_route.py'\\).read\\(\\)\\); print\\('OK'\\)\")"
     ]
   }
 }

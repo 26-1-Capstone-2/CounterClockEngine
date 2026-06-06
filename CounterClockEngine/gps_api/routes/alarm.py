@@ -109,10 +109,16 @@ def _find_last_train_with_fallback(
 def _transit_duration(
     origin_lat, origin_lon, dest_lat, dest_lon,
     search_type: int, opt: int, config,
+    target_time: datetime | None = None,
 ) -> tuple[int, int, int, str | None]:
     """
-    Resolve transit travel time, falling back to a walking estimate when the
-    trip is too short for ODSAY (under ~700 m, where it returns no route).
+    Resolve transit travel time for a trip arriving by target_time (KST).
+
+    The route is searched at the estimated *departure* time so that the result
+    reflects the actual time of day the user travels — e.g. a 03:00 arrival
+    finds no running bus and falls back to ALL / a walking estimate rather than
+    returning a daytime route. When target_time is None (or for short trips),
+    we fall back to a current-time search / walking estimate.
 
     Returns (duration_sec, walk_to_station_min, total_walk_min, boarding_station_name).
     """
@@ -120,13 +126,25 @@ def _transit_duration(
     if not is_short:
         odsay_key = config.get("ODSAY_API_KEY", "")
         try:
+            # Pass 1: search at the arrival time to get a rough duration. (ODSAY
+            # plans a trip *departing* at search_dt, but the exact minute barely
+            # changes which services run, so the arrival time is a fine seed.)
             _, duration_sec, _, legs = _fetch_transit_with_fallback(
                 origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
-                search_type=search_type, opt=opt,
+                search_type=search_type, opt=opt, search_dt=target_time,
             )
+            # Pass 2: refine by searching at the estimated departure time, which
+            # matters for long trips that cross a service boundary (e.g. last bus).
+            if target_time is not None:
+                departure_est = target_time - timedelta(seconds=duration_sec)
+                _, duration_sec, _, legs = _fetch_transit_with_fallback(
+                    origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+                    search_type=search_type, opt=opt, search_dt=departure_est,
+                )
             return duration_sec, first_walk_min(legs), total_walk_min(legs), boarding_station(legs)
         except ValueError:
-            # Near the 700 m boundary ODSAY can still return no route — walk instead.
+            # No transit route — either near the 700 m boundary, or no service at
+            # the requested time of day. Fall back to a walking estimate.
             pass
     return walk_est_min * 60, walk_est_min, walk_est_min, None
 
@@ -248,7 +266,7 @@ def _compute_alarm(body: dict) -> dict:
         if is_transit:
             duration_sec, walk_min, walk_total, which_station = _transit_duration(
                 current_lat, current_lng, dest_lat, dest_lng,
-                search_type, opt, current_app.config,
+                search_type, opt, current_app.config, target_time=target_time,
             )
         else:
             duration_sec = _get_duration(
@@ -417,7 +435,7 @@ def _compute_appointment_alarm(body: dict) -> dict:
         if is_transit:
             duration_sec, walk_min, walk_total, which_station = _transit_duration(
                 current_lat, current_lng, dest_lat, dest_lng,
-                search_type, opt, current_app.config,
+                search_type, opt, current_app.config, target_time=target_time,
             )
         else:
             duration_sec = _get_duration(
