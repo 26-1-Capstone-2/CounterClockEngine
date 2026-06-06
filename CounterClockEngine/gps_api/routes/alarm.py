@@ -16,7 +16,7 @@ interval (seconds): Adaptive GPS polling interval via Cosine Blend + Sigmoid Act
   urgency = blend(distance_urgency, time_urgency)  →  interval in [3, 300] seconds
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import Blueprint, request, jsonify, abort, current_app
 
 from gps_api.routes.personal import _get_duration, _parse_datetime
@@ -39,6 +39,16 @@ from gps_api.core.transit_route import (
 bp = Blueprint("alarm", __name__)
 
 _DEFAULT_BUFFER_MIN = 10.0
+
+# Korea Standard Time (UTC+9). The server may run in GMT/UTC, but clients send and
+# expect wall-clock KST times, so "now" must be evaluated in KST to stay consistent
+# with the naive KST target_time values parsed from requests.
+_KST = timezone(timedelta(hours=9))
+
+
+def _now_kst() -> datetime:
+    """Current KST wall-clock time as a naive datetime (matches parsed target_time)."""
+    return datetime.now(_KST).replace(tzinfo=None)
 
 
 _TRANSIT_MODES = {"SUBWAY", "BUS", "ALL"}
@@ -181,7 +191,7 @@ def _compute_alarm(body: dict) -> dict:
 
     if is_last_mode:
         # When target_time is null, use today as the date reference for last-train search.
-        search_ref = target_time if target_time is not None else datetime.now()
+        search_ref = target_time if target_time is not None else _now_kst()
 
         # Too close for transit: walking has no schedule, so the latest
         # departure is simply search_ref minus the walking duration.
@@ -264,7 +274,7 @@ def _compute_alarm(body: dict) -> dict:
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
     # Real-time ETA: if the user departs now, they arrive after the travel duration.
     # (departure_time + duration_sec would collapse back to target_time and be meaningless.)
-    estimated_arrival    = datetime.now() + timedelta(seconds=duration_sec)
+    estimated_arrival    = _now_kst() + timedelta(seconds=duration_sec)
     # Time the user actually boards transit: leave origin, then walk to the station.
     boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
@@ -352,7 +362,7 @@ def _adaptive_gps_interval(
         history = [current_point]
 
     geofences = [Geofence(id="destination", lat=dest_lat, lon=dest_lng, radius=100.0)]
-    appointment_remaining_sec = max((target_time - datetime.now()).total_seconds(), 0.0)
+    appointment_remaining_sec = max((target_time - _now_kst()).total_seconds(), 0.0)
     result = calculate_next_interval(
         user_lat=current_lat,
         user_lon=current_lng,
@@ -433,7 +443,7 @@ def _compute_appointment_alarm(body: dict) -> dict:
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
     # Real-time ETA: if the user departs now, they arrive after the travel duration.
     # (departure_time + duration_sec would collapse back to target_time and be meaningless.)
-    estimated_arrival    = datetime.now() + timedelta(seconds=duration_sec)
+    estimated_arrival    = _now_kst() + timedelta(seconds=duration_sec)
     # Time the user actually boards transit: leave origin, then walk to the station.
     boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
