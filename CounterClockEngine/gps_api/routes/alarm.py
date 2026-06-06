@@ -343,7 +343,7 @@ def _adaptive_gps_interval(
     When member_id is provided, the previous location is recalled from an in-memory
     cache so that real movement speed can be fed into the sigmoid multiplier.
     """
-    current_point = LocationPoint(lat=current_lat, lon=current_lng)
+    current_point = LocationPoint(lat=current_lat, lon=current_lng, timestamp=_now_kst())
 
     if member_id:
         prev = _location_history.get(member_id)
