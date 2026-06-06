@@ -72,35 +72,42 @@ def _within_service_hours(dt: datetime) -> bool:
     return h >= _SERVICE_START_H or h < _SERVICE_END_H
 
 
-def _fetch_transit_with_fallback(
+def _transit_leg(
     origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
-    search_type: int, opt: int,
-    search_dt=None,
-):
-    """Call fetch_transit_route; if BUS/SUBWAY returns no route, retry with ALL (search_type=0).
+    search_type: int, opt: int, target_time: datetime | None,
+) -> tuple[int, int, int, str] | None:
+    """Fetch one transit route in the given mode and return its travel result,
+    or None when no usable public-transport route exists.
 
-    NOTE: this fallback means a SUBWAY (or BUS) request can come back with the
-    *other* mode. When ODSAY has no pure-subway route between the points it
-    raises ValueError, and we silently retry as ALL (subway+bus). The ALL result
-    may begin with a bus leg, so `which_station` / boarding_station() will report
-    a 버스 정류장 even though the caller asked for SUBWAY. This is intentional
-    (better to return *some* route than to fail), but it is why a SUBWAY request
-    can surface a bus stop. Drop the fallback below if strict mode matching is
-    required instead.
+    Returns None — so the caller can fall back to ALL — when any of these holds:
+      * ODSAY has no path for the mode (raises ValueError),
+      * the implied departure (target − travel) lands outside service hours, or
+      * the route boards no transit at all (pure walk → boarding_station is None).
+
+    NOTE: with an ALL search the boarding leg may be a bus even when the caller
+    asked for SUBWAY (and vice versa); boarding_station() suffixes the name with
+    the leg's real mode, so a SUBWAY request can surface a 버스 정류장.
+
+    Returns (duration_sec, walk_to_station_min, total_walk_min, boarding_station_name).
     """
     try:
-        return fetch_transit_route(
+        _, duration_sec, _, legs = fetch_transit_route(
             origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
-            search_dt=search_dt, search_type=search_type, opt=opt,
+            search_dt=target_time, search_type=search_type, opt=opt,
         )
     except ValueError:
-        # search_type 1=SUBWAY / 2=BUS had no route → fall back to ALL (mode may change).
-        if search_type in _FALLBACK_SEARCH_TYPES:
-            return fetch_transit_route(
-                origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
-                search_dt=search_dt, search_type=_SEARCH_TYPE_ALL, opt=opt,
-            )
-        raise
+        return None
+    # ODSAY ignores operating hours, so verify the real departure time
+    # (target − travel) falls within transit service. If it lands in the
+    # no-service gap (e.g. a 03:00 trip), treat it as no transit available.
+    if target_time is not None:
+        departure = target_time - timedelta(seconds=duration_sec)
+        if not _within_service_hours(departure):
+            return None
+    station = boarding_station(legs)
+    if station is None:
+        return None  # route boards no transit (pure walk) → let the caller try ALL
+    return duration_sec, first_walk_min(legs), total_walk_min(legs), station
 
 
 def _find_last_train_with_fallback(
@@ -109,7 +116,7 @@ def _find_last_train_with_fallback(
 ):
     """Call find_last_train_departure; if BUS/SUBWAY returns None, retry with ALL (search_type=0).
 
-    Same caveat as _fetch_transit_with_fallback: a SUBWAY/BUS request that has no
+    Same caveat as _transit_leg's ALL fallback: a SUBWAY/BUS request that has no
     route in that mode falls back to ALL, so the returned boarding station may be
     the other mode (e.g. a 버스 정류장 for a SUBWAY request).
     """
@@ -135,36 +142,39 @@ def _transit_duration(
     """
     Resolve transit travel time for a trip arriving by target_time (KST).
 
-    ODSAY's path search ignores operating hours, so after getting a route we check
-    that the implied departure (target − travel) falls within transit service
-    hours (see _within_service_hours). A trip departing in the no-service gap
-    (e.g. 03:00) is treated as "no transit" and falls back to a walking estimate,
-    the same as a trip too short for ODSAY (≈700 m). When target_time is None the
-    service-hour check is skipped.
+    When the requested mode (SUBWAY/BUS) yields no usable public-transport route,
+    the search is retried with ALL (subway+bus) before any walking fallback — so a
+    request only reports walking (which_station=None) when no transit exists for
+    ALL either. "No usable route" covers ODSAY having no path, the implied
+    departure landing outside service hours, or the route boarding no transit at
+    all (pure walk); see _transit_leg.
+
+    Only a trip too short for ODSAY (≈700 m) skips the transit search outright and
+    walks directly — ALL would return nothing for it anyway. When target_time is
+    None the service-hour check is skipped.
 
     Returns (duration_sec, walk_to_station_min, total_walk_min, boarding_station_name).
     """
     is_short, walk_est_min = walk_fallback(origin_lat, origin_lon, dest_lat, dest_lon)
-    if not is_short:
-        odsay_key = config.get("ODSAY_API_KEY", "")
-        try:
-            _, duration_sec, _, legs = _fetch_transit_with_fallback(
-                origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
-                search_type=search_type, opt=opt, search_dt=target_time,
-            )
-            # ODSAY ignores operating hours, so verify the real departure time
-            # (target − travel) falls within transit service. If it lands in the
-            # no-service gap (e.g. a 03:00 trip), treat it as no transit available.
-            if target_time is not None:
-                departure = target_time - timedelta(seconds=duration_sec)
-                if not _within_service_hours(departure):
-                    raise ValueError("no transit service at the requested time")
-            return duration_sec, first_walk_min(legs), total_walk_min(legs), boarding_station(legs)
-        except ValueError:
-            # No transit route — too short for ODSAY (≈700 m), or no service at the
-            # requested time of day. Fall back to a walking estimate.
-            pass
-    return walk_est_min * 60, walk_est_min, walk_est_min, None
+    walk_result = (walk_est_min * 60, walk_est_min, walk_est_min, None)
+    if is_short:
+        # Too short for transit (≈700 m); ODSAY returns no route. Walk directly.
+        return walk_result
+
+    odsay_key = config.get("ODSAY_API_KEY", "")
+    result = _transit_leg(
+        origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+        search_type, opt, target_time,
+    )
+    # No public-transport route in the requested mode → fall back to ALL before
+    # giving up to a walking estimate.
+    if result is None and search_type != _SEARCH_TYPE_ALL:
+        result = _transit_leg(
+            origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
+            _SEARCH_TYPE_ALL, opt, target_time,
+        )
+    # No transit anywhere (ALL included) → keep the walking estimate as last resort.
+    return result if result is not None else walk_result
 
 
 def _compute_alarm(body: dict) -> dict:
