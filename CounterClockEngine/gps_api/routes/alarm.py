@@ -50,6 +50,25 @@ _VALID_PRIORITIES = {"MIN_TIME", "MIN_TRANSFER", "MIN_WALK"}
 _SEARCH_TYPE_ALL = 0
 _FALLBACK_SEARCH_TYPES = {1, 2}  # SUBWAY=1, BUS=2
 
+# Seoul public-transit service window (KST, configurable). ODSAY's path search
+# ignores operating hours and always returns a daytime route, so we gate on it
+# ourselves: service is treated as running from _SERVICE_START_H to _SERVICE_END_H
+# (wrapping past midnight). A departure landing in the gap (default 01:00–05:00)
+# is treated as "no transit" and falls back to walking.
+# NOTE: night buses (올빼미버스, ~23:30–04:00) are intentionally NOT modelled —
+# widen _SERVICE_END_H / adjust if you want to count them.
+_SERVICE_START_H = 5.0   # 05:00 first service
+_SERVICE_END_H   = 1.0   # 01:00 last service (next day)
+
+
+def _within_service_hours(dt: datetime) -> bool:
+    """True if dt's KST clock time falls within transit operating hours.
+
+    The window wraps past midnight: [_SERVICE_START_H, 24) ∪ [0, _SERVICE_END_H).
+    """
+    h = dt.hour + dt.minute / 60.0
+    return h >= _SERVICE_START_H or h < _SERVICE_END_H
+
 
 def _fetch_transit_with_fallback(
     origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
@@ -114,11 +133,12 @@ def _transit_duration(
     """
     Resolve transit travel time for a trip arriving by target_time (KST).
 
-    The route is searched at target_time so the result reflects the actual time
-    of day the user travels — e.g. a 03:00 trip finds no running bus and falls
-    back to ALL / a walking estimate rather than returning a daytime route. When
-    target_time is None (or for short trips), we search at the current time /
-    use a walking estimate.
+    ODSAY's path search ignores operating hours, so after getting a route we check
+    that the implied departure (target − travel) falls within transit service
+    hours (see _within_service_hours). A trip departing in the no-service gap
+    (e.g. 03:00) is treated as "no transit" and falls back to a walking estimate,
+    the same as a trip too short for ODSAY (≈700 m). When target_time is None the
+    service-hour check is skipped.
 
     Returns (duration_sec, walk_to_station_min, total_walk_min, boarding_station_name).
     """
@@ -126,17 +146,21 @@ def _transit_duration(
     if not is_short:
         odsay_key = config.get("ODSAY_API_KEY", "")
         try:
-            # Search at target_time so the result reflects the actual time of day:
-            # if no service runs then (e.g. 03:00), ODSAY raises ValueError, which
-            # falls through to the ALL retry and then the walking estimate below.
             _, duration_sec, _, legs = _fetch_transit_with_fallback(
                 origin_lat, origin_lon, dest_lat, dest_lon, odsay_key,
                 search_type=search_type, opt=opt, search_dt=target_time,
             )
+            # ODSAY ignores operating hours, so verify the real departure time
+            # (target − travel) falls within transit service. If it lands in the
+            # no-service gap (e.g. a 03:00 trip), treat it as no transit available.
+            if target_time is not None:
+                departure = target_time - timedelta(seconds=duration_sec)
+                if not _within_service_hours(departure):
+                    raise ValueError("no transit service at the requested time")
             return duration_sec, first_walk_min(legs), total_walk_min(legs), boarding_station(legs)
         except ValueError:
-            # No transit route — either near the 700 m boundary, or no service at
-            # the requested time of day. Fall back to a walking estimate.
+            # No transit route — too short for ODSAY (≈700 m), or no service at the
+            # requested time of day. Fall back to a walking estimate.
             pass
     return walk_est_min * 60, walk_est_min, walk_est_min, None
 

@@ -12,7 +12,8 @@
       "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); print\\('alarm.py syntax OK'\\)\")",
       "Bash(python -c \"import ast; ast.parse\\(open\\('gps_api/routes/alarm.py'\\).read\\(\\)\\); ast.parse\\(open\\('gps_api/core/transit_route.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
-      "Bash(git -C /home/jaekyungkim/Capstone2 log --oneline -6)"
+      "Bash(git -C /home/jaekyungkim/Capstone2 log --oneline -6)",
+      "Bash(cd *)"
     ]
   }
 }
