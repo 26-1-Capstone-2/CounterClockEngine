@@ -6,11 +6,13 @@ Common calculations:
   departure_time       = target_time - duration_sec
   latency_buffer       = recommended_buffer(member_id)  # lateness pattern based, 10 min for cold-start
   departure_alarm_time = departure_time - preparation_time - latency_buffer
-  estimated_arrival    = departure_time + duration_sec  # planned arrival (= target_time; last-train mode reports the last train's arrival)
+  estimated_arrival    = now + duration_sec  # live ETA from the real-time current position to the destination
 
 In last-train mode, target_time is reported as the arrival time at home
-(= estimated_arrival), not the last train's departure time; the actual departure
-time is still available in the boarding_time field.
+(the last train's scheduled arrival), not the last train's departure time; the
+actual departure time is still available in the boarding_time field. Note that
+estimated_arrival is a live projection (now + travel time) and may read earlier
+than target_time because it does not account for waiting for the train.
 
 interval (seconds): Adaptive GPS polling interval via Cosine Blend + Sigmoid Activity Recognition
   urgency = blend(distance_urgency, time_urgency)  →  interval in [3, 300] seconds
@@ -223,7 +225,9 @@ def _compute_alarm(body: dict) -> dict:
         is_short, walk_est_min = walk_fallback(current_lat, current_lng, dest_lat, dest_lng)
         if is_short:
             last_departure_dt    = search_ref - timedelta(minutes=walk_est_min)
-            estimated_arrival    = last_departure_dt + timedelta(minutes=walk_est_min)
+            home_arrival_dt      = last_departure_dt + timedelta(minutes=walk_est_min)
+            # Live ETA: arrival = now + walking time from the real-time current position.
+            estimated_arrival    = _now_kst() + timedelta(minutes=walk_est_min)
             departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
             interval, gps_mode   = _adaptive_gps_interval(
                 current_lat, current_lng, dest_lat, dest_lng,
@@ -232,7 +236,7 @@ def _compute_alarm(body: dict) -> dict:
             )
             return {
                 # Last-train mode: target_time = arrival time at home, not departure time.
-                "target_time":          estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
+                "target_time":          home_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
                 "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "estimated_arrival":    estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
                 "latency_buffer_min":   round(latency_buffer_min, 1),
@@ -256,6 +260,9 @@ def _compute_alarm(body: dict) -> dict:
         last_departure_dt, last_duration_sec, walk_min, walk_total_min, last_station = result
         last_arrival_dt      = last_departure_dt + timedelta(seconds=last_duration_sec)
         departure_alarm_time = last_departure_dt - timedelta(minutes=total_buffer_min)
+        # Live ETA: arrival = now + travel time from the real-time current position.
+        # May read earlier than target_time since it ignores waiting for the train.
+        estimated_arrival    = _now_kst() + timedelta(seconds=last_duration_sec)
         interval, gps_mode   = _adaptive_gps_interval(
             current_lat, current_lng, dest_lat, dest_lng,
             last_duration_sec, last_arrival_dt,
@@ -266,7 +273,7 @@ def _compute_alarm(body: dict) -> dict:
             # Last-train mode: target_time = arrival time at home, not departure time.
             "target_time":           last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "departure_alarm_time":  departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "estimated_arrival":     last_arrival_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+            "estimated_arrival":     estimated_arrival.strftime("%Y-%m-%dT%H:%M:%S"),
             "latency_buffer_min":    round(latency_buffer_min, 1),
             "boarding_time":         last_departure_dt.strftime("%Y-%m-%dT%H:%M:%S"),
             "interval":              interval,
@@ -297,9 +304,9 @@ def _compute_alarm(body: dict) -> dict:
 
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
-    # Expected arrival following the plan: depart at departure_time and travel
-    # duration_sec, which arrives exactly at the requested target_time.
-    estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    # Live ETA: from the real-time current position, arrival = now + travel time.
+    # Updates on every poll as the user moves (may differ from target_time).
+    estimated_arrival    = _now_kst() + timedelta(seconds=duration_sec)
     # Time the user actually boards transit: leave origin, then walk to the station.
     boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
@@ -348,7 +355,7 @@ def journey_alarm():
       {
         "target_time": "2026-05-25T18:00:00",    // goal arrival time (= arrival time in last-train mode)
         "departure_alarm_time": "2026-05-25T17:20:00",
-        "estimated_arrival": "2026-05-25T18:00:00",  // planned arrival (= target_time when not in last-train mode)
+        "estimated_arrival": "2026-05-25T17:42:00",  // live ETA: now + travel time from the real-time current position (updates each poll)
         "latency_buffer_min": 5.2,         // actual applied lateness pattern buffer (minutes)
         "boarding_time": "2026-05-25T17:23:00",  // time the user boards transit (null for DRIVING)
         "interval": 30,                    // front-end GPS API polling interval (seconds)
@@ -466,9 +473,9 @@ def _compute_appointment_alarm(body: dict) -> dict:
 
     departure_time       = target_time - timedelta(seconds=duration_sec)
     departure_alarm_time = departure_time - timedelta(minutes=total_buffer_min)
-    # Expected arrival following the plan: depart at departure_time and travel
-    # duration_sec, which arrives exactly at the requested target_time.
-    estimated_arrival    = departure_time + timedelta(seconds=duration_sec)
+    # Live ETA: from the real-time current position, arrival = now + travel time.
+    # Updates on every poll as the user moves (may differ from target_time).
+    estimated_arrival    = _now_kst() + timedelta(seconds=duration_sec)
     # Time the user actually boards transit: leave origin, then walk to the station.
     boarding_dt          = departure_time + timedelta(minutes=walk_min) if is_transit else None
     interval, gps_mode   = _adaptive_gps_interval(
@@ -513,7 +520,7 @@ def appointment_alarm():
     Response JSON:
       {
         "departure_alarm_time": "2026-05-25T17:30:00",
-        "estimated_arrival": "2026-05-25T18:00:00",  // planned arrival (= target_time)
+        "estimated_arrival": "2026-05-25T17:42:00",  // live ETA: now + travel time from the real-time current position (updates each poll)
         "boarding_time": "2026-05-25T17:33:00",  // time the user boards transit (null for DRIVING)
         "interval": 30,                    // front-end GPS API polling interval (seconds)
         "which_station": "강남역",         // boarding station/stop name w/ 역·정류장 suffix (null for DRIVING / walk fallback)

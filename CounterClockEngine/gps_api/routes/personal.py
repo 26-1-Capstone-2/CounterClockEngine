@@ -11,6 +11,7 @@ from flask import Blueprint, request, jsonify, abort, current_app
 
 from gps_api.core.kakao_route import fetch_route as kakao_fetch_route
 from gps_api.core.transit_route import fetch_transit_route
+from gps_api.core.timeutil import now_kst as _now_kst
 
 bp = Blueprint("personal", __name__)
 
@@ -42,7 +43,7 @@ def departure():
     Response JSON:
       {
         "departure_alarm_time": "2026-05-25T17:30:00",
-        "estimated_arrival": "2026-05-25T18:00:00"
+        "estimated_arrival": "2026-05-25T17:42:00"   // live ETA: now + travel time from the real-time current position (updates each poll)
       }
     """
     body = request.get_json(silent=True) or {}
@@ -82,8 +83,9 @@ def departure():
     departure_time      = target_time - timedelta(seconds=duration_sec)
     # Alarm time = departure time - preparation time
     departure_alarm_time = departure_time - timedelta(minutes=preparation_time)
-    # Estimated arrival = departure time + travel duration (= target_time)
-    estimated_arrival   = departure_time + timedelta(seconds=duration_sec)
+    # Live ETA: from the real-time current position, arrival = now + travel time.
+    # Updates on every poll as the user moves (may differ from target_time).
+    estimated_arrival   = _now_kst() + timedelta(seconds=duration_sec)
 
     return jsonify({
         "departure_alarm_time": departure_alarm_time.strftime("%Y-%m-%dT%H:%M:%S"),
